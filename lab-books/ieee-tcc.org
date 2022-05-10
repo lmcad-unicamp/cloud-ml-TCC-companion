@@ -1,0 +1,2091 @@
+#+options: ':nil *:t -:t ::t <:t H:3 \n:nil ^:t arch:headline
+#+options: author:t broken-links:nil c:nil creator:nil
+#+options: d:(not "LOGBOOK") date:t e:t email:nil f:t inline:t num:nil
+#+options: p:nil pri:nil prop:nil stat:t tags:t tasks:t tex:t
+#+options: timestamp:t title:t toc:t todo:t |:t
+#+date: 2019-09-27 sex
+#+title: Graphics for our extended version of the SBAC-PAD/WCC 2011
+#+author: Rafael Keller Tesser
+#+email: rktesser@unicamp.br
+#+language: en
+#+tags: noexport(n) deprecated(d) ignore(i) RafaelTesser(R) EdsonBorin(E) AlvaroMarques(A)
+#+select_tags: export
+#+exclude_tags: noexport
+#+startup: overview indent
+#+property: header-args:R :output-dir "../img/202102-perf-analysis/" :session perf202108
+#+property: datadir "../data/202102-perf-analysis"
+* Description
+
+Scripts and graphics related to the paper we intend to submit to IEEE the Transactions on Cloud Computing.
+
+* Loading packages
+#+name: load-r-packages-perf-analysis
+#+begin_src R :results output :exports both :noweb no-export
+suppressMessages(library(data.table))
+suppressMessages(library(tidyverse))
+options(crayon.enabled = FALSE)
+options(dplyr.sumarise.inform = FALSE)
+options(tidyverse.quiet = TRUE)
+options(dplyr.summarise.inform = FALSE)
+#+end_src
+
+#+RESULTS: load-r-packages-perf-analysis
+
+* Common arguments
+#+name: args-perf-analysis
+#+begin_src R :results output :exports both :noweb no-export
+machines <- c("g4dnxlarge-1", "g4dn2xlarge-1", "g4dn4xlarge-1", "g4dn8xlarge-1", 
+              "g4dn12xlarge-4", "g4dn16xlarge-1", "p2-1", "p2-8", "p2-16",
+              "p3-1", "p3-4", "p3-8")
+
+gpu.counts <- data.frame(instance = machines,
+                          n.gpu = c(1, 1, 1, 1, 4, 1, 1, 8, 16, 1, 4, 8))
+
+perf.data.file <- "../data/202102-perf-analysis/perf-data-2.csv.gz"
+
+summary.perf.data.file <- "../data/202102-perf-analysis/perf-summary.csv.gz"
+#+end_src
+
+#+RESULTS: args-perf-analysis
+
+* Functions
+** Function to read the csv data files
+
+#+name: function-read-perf
+#+begin_src R :results output :exports both
+read.ml.perf.data <- function(csv.fname)
+{
+        read.table(gzfile(csv.fname),
+               sep=',',
+               header = TRUE,
+               row.names = 1,
+               stringsAsFactors = TRUE)
+}
+#+end_src
+
+#+RESULTS: function-read-perf
+
+** Function to fix the execution numbers
+
+#+name: function-fix-exec-numbers
+#+begin_src R :results output :exports both :noweb no-export
+fix_exec_numbers <- function(dt)
+{
+    dt %>% 
+        group_by(model, batch.size, n.epochs, cloud.instance) %>%
+        mutate(execution = as.numeric(as.factor(execution))) %>%
+        ungroup()
+}
+#+end_src
+
+#+RESULTS: function-fix-exec-numbers
+
+#+RESULTS: FUNCTION_FIX_EXEC_NUMBERS
+
+** Utility functions
+#+name: utility-functions-perf-analysis
+#+begin_src R :results output :exports both :noweb no-export
+add_gpu_counts <- function(dt){
+    rowwise(dt) %>%
+        mutate(n.gpu = gpu.counts$n.gpu[gpu.counts$instance == cloud.instance])
+}
+
+lbl_pad <- function(x, pad = 10){
+    lbl <- c(stringr::str_pad(x[-length(x)], pad, "right"), x[length(x)])
+    names(lbl) <- names(x)
+    lbl
+}
+
+lbl_extend <- function(x, n = 5, str = " "){
+    lbl <- x
+    lbl <- c(paste0(x[-length(x)], strrep(str, n)), x[length(x)])
+    names(lbl) <- names(x)
+    lbl
+}
+#+end_src
+
+** R source block that includes all functions
+
+This is the block that should be included in other blocks (mainly the
+session initialization block). It includes all other function blocks
+and may also declare a few new functions.
+
+#+name: functions-perf-analysis
+#+begin_src R :results output :exports both :noweb no-export
+<<function-read-perf>>
+
+<<function-fix-exec-numbers>>
+
+<<utility-functions-perf-analysis>>
+#+end_src
+
+#+RESULTS: functions-perf-analysis
+
+* Labellers
+
+#+name: LABELLERS_TR_PERF_ANALYSIS
+#+begin_src R :results output :exports both :noweb no-export
+#Cloud VM instances
+perf.summary %>%
+    select(cloud.instance, n.gpu) %>% unique() %>%
+    mutate(cloud.instance = as.character(cloud.instance), inst.name = unlist(strsplit(cloud.instance, "-"))[1] ) %>%
+    rowwise() %>%
+    mutate(lbl = paste0(inst.name, ": ", n.gpu, ifelse(n.gpu == 1, " GPU", " GPUs"))) -> gpu.cnt
+lbl.inst <- gpu.cnt$lbl
+names(lbl.inst) <- gpu.cnt$cloud.instance
+
+## performance estimation methods
+lbl.method <- c(e1s2 = "Epoch 1, step 2", avg.e1s2to6 = "Avg. Epoch 1, steps 2 to 6", avg.e1s2to11 = "Avg. Epoch 1, steps 2 to 11")
+
+## machine-learning models
+lbl.model <- c("CNN/MNIST", "RESNET50/CIFAR", "FCN/SEISMIC")
+names(lbl.model) <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+#+end_src
+
+* 2021-03-10 Themes
+** Custom theme v1
+
+#+name: THEME_PERF_ANALYSIS_V1
+#+begin_src R :results output :exports both :noweb no-export
+
+# custom theme - 1st version
+custom_theme_v1 <-  function(){
+    theme_bw() +
+    theme(text                  = element_text(family = "serif"),
+          legend.position       = "top",
+          legend.key.height     = unit(1, "line"),
+          legend.key.width      = unit(4, "line"),
+          legend.spacing.x      = unit(0.5, "line"),
+          ## legend.box.background = element_rect(size = 1),
+          legend.margin         = margin(0, 0, 0, 0, "pt"),
+          legend.title          = element_text(size = 20, vjust = 0.5),
+          legend.text           = element_text(size = 20),
+          axis.title            = element_text(size = 24),
+          axis.title.x          = element_text(margin = margin(3, 0, 0, 0, "mm")),
+          axis.title.y          = element_text(margin = margin(0, 3, 0, 0, "mm")),
+          axis.text             = element_text(size = 18),
+          axis.text.x           = element_text(angle = 90, hjust = 0.8, vjust = 0.5),
+          strip.text            = element_text(size = 18, margin = margin(2, 1, 4, 1, "pt")),
+          strip.background      = element_rect(fill = "white"),
+          panel.spacing         = unit(0.5, "line"),
+          panel.grid.major      = element_line(color = "grey70", linetype = "solid", size = 0.3),
+          panel.grid.minor      = element_line(color = "grey60", linetype = "dotted", size = 0.5),
+          plot.margin           = margin(0.5, 1, 0, 1, "mm"))
+}
+#+end_src
+
+#+RESULTS: THEME_PERF_ANALYSIS_V1
+
+** Custom theme histogram v1
+
+#+name: custom-theme-hist
+#+begin_src R :results output :exports both :noweb no-export
+
+# custom theme - 1st version
+custom_theme_hist <-  function(){
+    theme_bw() +
+    theme(text                  = element_text(family = "serif"),
+          legend.position       = "top",
+          legend.key.height     = unit(1, "line"),
+          legend.key.width      = unit(4, "line"),
+          legend.spacing.x      = unit(0.5, "line"),
+          legend.margin         = margin(0, 0, 0, 0, "pt"),
+          legend.title          = element_text(size = 20, vjust = 0.5),
+          legend.text           = element_text(size = 20),
+          axis.title            = element_text(size = 24),
+          axis.title.x          = element_text(margin = margin(2, 0, 0, 0, "mm")),
+          axis.title.y          = element_text(margin = margin(0, 2, 0, 0, "mm")),
+          axis.text             = element_text(size = 18),
+          axis.text.x           = element_text(angle = 90, hjust = 0, vjust = 0.5),
+          strip.text            = element_text(size = 18, margin = margin(2, 1, 4, 1, "pt")),
+          strip.background      = element_rect(fill = "white"),
+          panel.spacing         = unit(0.5, "line"),
+          panel.grid.major      = element_line(color = "grey70", linetype = "solid", size = 0.3),
+          panel.grid.minor      = element_line(color = "grey60", linetype = "dotted", size = 0.5),
+          plot.margin           = margin(0.5, 1, 0, 1, "mm"),
+          ## panel.grid.major = element_line(color = "darkgray", linetype = "dotted"
+          )
+}
+custom_theme_hist_small <-  function(){
+    theme_bw() +
+    theme(text                  = element_text(size = 8, family = "serif"),
+          legend.position       = "top",
+          legend.key.height     = unit(1, "line"),
+          legend.key.width      = unit(4, "line"),
+          legend.spacing.x      = unit(0.5, "line"),
+          legend.margin         = margin(0, 0, 0, 0, "pt"),
+          legend.title          = element_text(size = 8, vjust = 0.5),
+          legend.text           = element_text(size = 8),
+          axis.title            = element_text(size = 10),
+          axis.title.x          = element_text(margin = margin(2, 0, 0, 0, "mm")),
+          axis.title.y          = element_text(margin = margin(0, 2, 0, 0, "mm")),
+          axis.text             = element_text(size = 8),
+          axis.text.x           = element_text(angle = 90, hjust = 0, vjust = 0.5),
+          strip.text            = element_text(size = 8, margin = margin(2, 1, 2.5, 1, "pt")),
+          strip.background      = element_rect(fill = "white"),
+          panel.spacing         = unit(3, "pt"),
+          # panel.grid.major      = element_line(color = "grey70", linetype = "solid", size = 0.3),
+          # panel.grid.minor      = element_line(color = "grey60", linetype = "dotted", size = 0.5),
+          plot.margin           = margin(1, 1, 1, 1, "pt"),
+          ## panel.grid.major = element_line(color = "darkgray", linetype = "dotted"
+          )
+}
+#+end_src
+
+#+RESULTS: custom-theme-hist
+
+
+
+** Custom theme v2
+
+This theme is for use when generating the plots with sizes in "cm"
+and resolution of 150ppi.
+
+#+name: theme-perf-analysis-v2
+#+begin_src R :results output :exports both :noweb no-export
+
+# custom theme - 2nd version
+custom_theme_v2 <-  function(){
+    theme_bw(base_size = 12, base_family ="serif") +
+    theme(legend.position       = "top",
+          legend.key.height     = unit(.5, "line"),
+          legend.key.width      = unit(1.5, "line"),
+          legend.spacing.x      = unit(.1, "line"),
+          ## legend.box.background = element_rect(size = 1),
+          legend.box.spacing    = unit(1, "mm"),
+          legend.margin         = margin(0, 0, 0, 0, "mm"),
+          legend.title          = element_text(size = 8),
+          legend.text           = element_text(size = 8),
+          axis.title            = element_text(size = 10),
+          axis.title.x          = element_text(margin = margin(1, 0, 0.5, 0, "mm")),
+          axis.title.y          = element_text(margin = margin(0, 1, 0, 0, "mm")),
+          axis.text             = element_text(size = 8),
+          ## axis.text.x           = element_text(angle = 90, hjust = 0.8, vjust = 0.5),
+          strip.text            = element_text(size = 10, margin = margin(2, 1, 4, 1, "pt")),
+          strip.background      = element_rect(fill = "white"),
+          panel.spacing         = unit(1, "mm"),
+          panel.grid.major      = element_line(color = "grey70", linetype = "solid", size = 0.1),
+          panel.grid.minor      = element_line(color = "grey60", linetype = "dotted", size = 0.2),
+          plot.margin           = margin(0.5, 1, 0, 1, "mm"))
+}
+
+# custom theme - 2nd version - small
+custom_theme_v2_small <-  function(){
+    theme_bw(base_size = 10, base_family ="serif") +
+    theme(legend.position       = "top",
+          legend.key.height     = unit(.5, "line"),
+          legend.key.width      = unit(1.5, "line"),
+          legend.spacing.x      = unit(.1, "line"),
+          ## legend.box.background = element_rect(size = 1),
+          legend.box.spacing    = unit(1, "mm"),
+          legend.margin         = margin(0, 0, 0, 0, "mm"),
+          legend.title          = element_text(size = 8),
+          legend.text           = element_text(size = 8),
+          axis.title            = element_text(size = 8),
+          axis.title.x          = element_text(margin = margin(1, 0, 0.5, 0, "mm")),
+          axis.title.y          = element_text(margin = margin(0, 1, 0, 0, "mm")),
+          axis.text             = element_text(size = 6),
+          ## axis.text.x           = element_text(angle = 90, hjust = 0.8, vjust = 0.5),
+          strip.text            = element_text(size = 10, margin = margin(2, 1, 4, 1, "pt")),
+          strip.background      = element_rect(fill = "white"),
+          panel.spacing         = unit(1, "mm"),
+          panel.grid.major      = element_line(color = "grey70", linetype = "solid", size = 0.1),
+          panel.grid.minor      = element_line(color = "grey60", linetype = "dotted", size = 0.2),
+          plot.margin           = margin(0.5, 1, 0, 1, "mm"))
+}
+#+end_src
+
+#+RESULTS: theme-perf-analysis-v2
+
+** Custom ggplot2 theme for smaller plots
+
+#+name: MY_THEME_SMALL
+#+begin_src R :results output :exports both :noweb no-export
+
+# custom theme - smaller version
+custom_theme_small <-  function(){
+    theme_bw(base_size=10) +
+    theme(text                  = element_text(family = "serif"),
+          legend.position       = "top",
+          legend.box.spacing    = unit(0, "pt"),
+          legend.key.height     = unit(5, "pt"),
+          legend.key.width      = unit(20, "pt"),
+          legend.spacing.x      = unit(3, "pt"),
+          ## legend.box.background = element_rect(size = 1),
+          legend.margin         = margin(0, 0, 0, 0, "pt"),
+          legend.box.margin         = margin(0, 0, 0, 0, "pt"),
+          legend.title          = element_text(size = 8, vjust = 0.5),
+          legend.text           = element_text(size = 8),
+          axis.title            = element_text(size = 8),
+          axis.title.x          = element_text(margin = margin(2, 0, 0, 0, "pt")),
+          axis.title.y          = element_text(margin = margin(0, 2, 0, 0, "pt")),
+          axis.text             = element_text(size = 6),
+          ## axis.text.x           = element_text(angle = 90, hjust = 0.8, vjust = 0.5),
+          strip.text            = element_text(size = 6, margin = margin(1, 1, 1, 1, "pt")),
+          strip.background      = element_rect(fill = "white"),
+          panel.spacing.y       = unit(6, "pt"),
+          panel.spacing.x       = unit(8, "pt"),
+          ##panel.grid.major      = element_line(color = "grey70", linetype = "solid", size = 0.3),
+          ##panel.grid.minor      = element_line(color = "grey60", linetype = "solid", size = 0.2),
+          panel.grid.major      = element_line(color = "grey70", size=0.25),
+          panel.grid.minor      = element_line(color = "grey80", size=0.15),
+          plot.margin           = margin(1, 1, 0, 1, "pt"))
+}
+#+end_src
+
+** Code block to include themes
+
+#+name: custom-themes-perf-analysis
+#+begin_src R :results output :exports both :noweb no-export
+<<THEME_PERF_ANALYSIS_V1>>
+<<custom-theme-hist>>
+<<theme-perf-analysis-v2>>
+<<MY_THEME_SMALL>>
+#+end_src
+
+* Init block to be included by other blocks
+
+#+name: INIT_TR_PERF_ANALYSIS_V3
+#+begin_src R :results output :exports both :noweb no-export
+<<load-r-packages-perf-analysis>>
+
+<<args-perf-analysis>>
+
+<<functions-perf-analysis>>
+
+fntscl = 0.352777778 #use to scale ggplot font sizes to their equivalent in pt 
+
+if(!exists("reload.perf.data")){
+    reload.perf.data = TRUE
+}
+
+if((!exists("perf.dt")) | reload.perf.data == TRUE){ ## timings per step
+    print("Loading performance data...")
+    perf.dt <- read.ml.perf.data(perf.data.file)
+    perf.dt$cloud.instance <- factor(perf.dt$cloud.instance,
+                                     levels = machines)
+    perf.dt %>%
+        fix_exec_numbers() %>%
+        add_gpu_counts() -> perf.dt 
+}
+
+if((!exists("perf.summary")) | reload.perf.data == TRUE){ ## timings per execution
+    print("Loading summary data...")
+    perf.summary <- read.ml.perf.data(summary.perf.data.file)
+    perf.summary$cloud.instance <- factor(perf.summary$cloud.instance,
+                                             levels = machines)
+    perf.summary %>%
+        ## making the execution numbers sequential
+        group_by(model, batch.size, cloud.instance, n.epochs) %>%
+        arrange(execution) %>%
+        mutate(execution = 1:n()) %>% ungroup() %>%
+        add_gpu_counts() -> perf.summary
+}
+
+reload.perf.data = FALSE
+
+<<LABELLERS_TR_PERF_ANALYSIS>>
+
+<<custom-themes-perf-analysis>>
+#+end_src
+
+#+RESULTS: INIT_TR_PERF_ANALYSIS_V3
+
+* Tempo da primeira iteração é significativamente maior do que o tempo das outras
+
+** 2021-03-10 Plotting function
+#+name: fun_plot_first_iter-small
+#+begin_src R :results output :exports both :noweb no-export
+<<INIT_TR_PERF_ANALYSIS_V3>>
+
+## lbl_pad <- function(x, pad = 10){stringr::str_pad(x, pad, "right")}
+
+lbl.inst.pad <- str_pad(lbl.inst, 25, "right")
+
+lbl.model.2l <- c("CNN /\nMNIST", "RESNET50\n/ CIFAR", "FCN /\nSEISMIC")
+names(lbl.model.2l) <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+
+plot_first_iter_rel_avg_small <- function(models, machines, epochs){
+perf.summary %>%
+    filter(cloud.instance %in% machines & model %in% models & n.epochs == epochs) %>%
+    group_by(model, batch.size, cloud.instance) %>%
+    mutate(execution = factor(execution)) %>%
+    ggplot(aes(x = batch.size, y = e1s1.by.TMiIAvg2,  color = execution)) +
+    geom_line(size = 0.3) + geom_point(size = 0.75) +
+    facet_grid(cols = vars(cloud.instance), rows = vars(model), scales="free_y",
+               labeller = labeller(cloud.instance = lbl.inst, model = lbl.model.2l)) + 
+    scale_x_continuous(trans='log2', name =  "Batch size") +
+    scale_y_continuous(limits=c(0,NA), name = "First step time relative to the average",
+                       expand = expansion(mult = c(0,0.1))) +
+    scale_color_discrete(name = "Execution:", labels = lbl_pad) +
+    custom_theme_small()
+}
+
+plot_first_iter_rel_avg_small_one_exec <- function(models, machines, epochs){
+perf.summary %>%
+    filter(cloud.instance %in% machines & model %in% models & n.epochs == epochs) %>%
+    group_by(model, batch.size, cloud.instance) %>%
+    mutate(execution = factor(execution),
+           cloud.instance = factor(cloud.instance, levels = machines)) %>%
+    ggplot(aes(x = batch.size, y = e1s1.by.TMiIAvg2,  color = cloud.instance)) +
+    geom_line(size = 0.3) + geom_point(size = 0.75) +
+    facet_grid(rows = vars(model), scales="free_y",
+               labeller = labeller(model = lbl.model.2l)) + 
+    scale_x_continuous(trans='log2', name =  "Batch size") +
+    scale_y_continuous(limits=c(0,NA), name = "First step time relative\nto the average",
+                       expand = expansion(mult = c(0,0.1))) +
+    scale_color_discrete(name = "VM Type:", labels = lbl.inst,
+                         guide = guide_legend(nrow=3)) +
+    custom_theme_small()
+}
+#+end_src
+
+
+** Máquinas p1 e p2
+
+These should be similar to what whe did before in section [[*First step time relative to average times of the remaining][First step time relative to average times of the remaining]]
+
+#+name: first-iteration-relative-to-others-small
+#+begin_src R :results output graphics file :file "first-iteration-relative-to-others-small.png" :exports both :res 150 :units in :width 6 :height 2 :noweb no-export
+<<fun_plot_first_iter-small>>
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+machines <- c("p2-1","p2-8","p2-16", "p3-1", "p3-4", "p3-8")
+
+plot_first_iter_rel_avg_small(models, machines, 5) +
+    theme(legend.position = "none",
+          panel.spacing.y = unit(4, "pt"))
+#+end_src
+
+#+RESULTS: first-iteration-relative-to-others-small
+[[file:../img/202102-perf-analysis/first-iteration-relative-to-others-small.png]]
+
+
+#+name: first-iteration-relative-to-others-small-pdf
+#+begin_src R :results output graphics file :file "first-iteration-relative-to-others-small.pdf" :exports both :width 6 :height 2 :noweb no-export
+<<first-iteration-relative-to-others-small>>
+#+end_src
+
+#+RESULTS: first-iteration-relative-to-others-small-pdf
+[[file:../img/202102-perf-analysis/first-iteration-relative-to-others-small.pdf]]
+
+*** Only p2
+#+name: first-iteration-relative-to-others-p2-small
+#+begin_src R :results output graphics file :file "first-iteration-relative-to-others-p2-small.png" :exports both :res 150 :units in :width 3 :height 2 :noweb no-export
+<<fun_plot_first_iter-small>>
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+machines <- c("p2-1","p2-8","p2-16")
+
+plot_first_iter_rel_avg_small(models, machines, 5) +
+    theme(legend.position = "none",
+          panel.spacing.y = unit(4, "pt"))
+#+end_src
+
+#+RESULTS: first-iteration-relative-to-others-p2-small
+[[file:../img/202102-perf-analysis/first-iteration-relative-to-others-p2-small.png]]
+
+
+#+name: first-iteration-relative-to-others-p2-small-pdf
+#+begin_src R :results output graphics file :file "first-iteration-relative-to-others-p2-small.pdf" :exports both :width 3 :height 2 :noweb no-export
+<<first-iteration-relative-to-others-p2-small>>
+#+end_src
+
+#+RESULTS: first-iteration-relative-to-others-p2-small-pdf
+[[file:../img/202102-perf-analysis/first-iteration-relative-to-others-p2-small.pdf]]
+
+
+*** Only p3
+#+name: first-iteration-relative-to-others-p3-small
+#+begin_src R :results output graphics file :file "first-iteration-relative-to-others-p3-small.png" :exports both :res 150 :units in :width 3 :height 2 :noweb no-export
+<<fun_plot_first_iter-small>>
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+machines <- c("p3-1", "p3-4", "p3-8")
+
+plot_first_iter_rel_avg_small(models, machines, 5) +
+    theme(legend.position = "none",
+          panel.spacing.y = unit(4, "pt"))
+#+end_src
+
+#+RESULTS: first-iteration-relative-to-others-p3-small
+[[file:../img/202102-perf-analysis/first-iteration-relative-to-others-p3-small.png]]
+
+#+name: first-iteration-relative-to-others-p3-small-pdf
+#+begin_src R :results output graphics file :file "first-iteration-relative-to-others-p3-small.pdf" :exports both :width 3 :height 2 :noweb no-export
+<<first-iteration-relative-to-others-p3-small>>
+#+end_src
+
+#+RESULTS: first-iteration-relative-to-others-p3-small-pdf
+[[file:../img/202102-perf-analysis/first-iteration-relative-to-others-p3-small.pdf]]
+
+
+** Máchines g4dn*xlarge
+
+#+name: first-iteration-relative-to-others-g4-small
+#+begin_src R :results output graphics file :file "first-iteration-relative-to-others-g4-small.png" :exports both :res 150 :units in :width 3.3 :height 2.2 :noweb no-export
+<<fun_plot_first_iter-small>>
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+machines <- c("g4dnxlarge-1", "g4dn2xlarge-1", "g4dn4xlarge-1",
+              "g4dn8xlarge-1", "g4dn16xlarge-1", "g4dn12xlarge-4")
+
+lbl.model.2l <- c("CNN /\nMNIST", "RESNET50\n/ CIFAR", "FCN /\nSEISMIC")
+names(lbl.model.2l) <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+
+plot_first_iter_rel_avg_small_one_exec(models, machines, 5) +
+    theme(legend.position = "top",
+          legend.margin = margin(0, 1, 1, 1, "pt"),
+          legend.text = element_text(margin = margin(0, 10, 0, 0, "pt")),
+          legend.key.height     = unit(10, "pt"))
+#+end_src
+
+#+RESULTS: first-iteration-relative-to-others-g4-small
+[[file:../img/202102-perf-analysis/first-iteration-relative-to-others-g4-small.png]]
+
+
+#+name: first-iteration-relative-to-others-g4-small-pdf
+#+begin_src R :results output graphics file :file "first-iteration-relative-to-others-g4-small.pdf" :exports both :width 3.3 :height 2.2 :noweb no-export
+<<first-iteration-relative-to-others-g4-small>>
+#+end_src
+
+#+RESULTS: first-iteration-relative-to-others-g4-small-pdf
+[[file:../img/202102-perf-analysis/first-iteration-relative-to-others-g4-small.pdf]]
+
+* The time of the last iteration of the first epoch should also be small
+
+** Init
+#+name: small-plots-init
+#+begin_src R :results output :exports both :noweb no-export
+if(!exists("force.init")){
+    force.init = FALSE
+}
+if(!exists("init.done") | force.init == TRUE){
+    <<INIT_TR_PERF_ANALYSIS_V3>>
+    init.done = TRUE
+    force.init = FALSE
+}
+#+end_src
+
+#+RESULTS: small-plots-init
+
+
+** Plotting function
+
+#+name: function-plot-last-iter-rel-times-small
+#+begin_src R :results output :exports both :noweb no-export
+lbl.model.2l <- c("CNN /\nMNIST", "RESNET50\n/ CIFAR", "FCN /\nSEISMIC")
+names(lbl.model.2l) <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+
+preprocess_last_iter_rel_times <- function(dt, machines, models, epochs = 5)
+{
+    dt %>%
+        filter(cloud.instance %in% machines & model %in% models & n.epochs == epochs) %>%
+        group_by(model, batch.size, cloud.instance, execution) %>%
+        summarize(e1last.time = step.time[epoch == 1 & step == max(step)],
+                  avg.others = mean(step.time[!(epoch == 1 & (step %in% c(1,max(step))))]),
+                  e1last.rel.avg = e1last.time / avg.others) %>%
+        group_by(model, batch.size, cloud.instance) %>%
+        mutate(n.exec = length(execution), execution = 1:n.exec) %>%
+        ungroup %>%
+        mutate(execution = factor(execution))
+}
+
+plot_last_iter_rel_times <- function(dt, machines, models, epochs = 5)
+{
+    dt %>%
+        ggplot(aes(x = batch.size, y = e1last.rel.avg,  color = execution)) +
+        geom_line(size=0.3) + geom_point(size = 0.75) +
+        scale_x_continuous(trans = 'log2', name = "Batch size") +
+        scale_y_continuous(limits = c(0,NA), name = expression('Relative iteration execution time'), expand = expansion(mult = c(0,0.1))) +
+        scale_color_discrete(name = "Execution:", labels = function(x) lbl_pad(x, 10)) +
+        facet_grid(cols = vars(cloud.instance), rows = vars(model), scales = "free_y",
+                   labeller = labeller(cloud.instance = lbl.inst, model = lbl.model.2l)) +
+        custom_theme_small()
+}
+#+end_src
+
+#+RESULTS: function-plot-last-iter-rel-times-small
+
+** p2 e p3 VMs
+
+#+name: last-iteration-exec-time-rel-avg-others-p2-p3-small
+#+begin_src R :results output graphics file :file "last-iteration-exec-time-rel-avg-others-p2-p3-small.png" :exports both :res 150 :units in :width 6 :height 2 :noweb no-export
+<<small-plots-init>>
+<<function-plot-last-iter-rel-times-small>>
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+machines <- c("p2-1","p2-8","p2-16", "p3-1", "p3-4", "p3-8")
+epochs = 5
+
+if(!exists("dt.rel.li")){
+    dt.rel.li <- preprocess_last_iter_rel_times(perf.dt, machines, models, epochs)
+}
+plot_last_iter_rel_times(dt.rel.li, machines, models, epochs)
+#+end_src
+
+#+RESULTS: last-iteration-exec-time-rel-avg-others-p2-p3-small
+[[file:../img/202102-perf-analysis/last-iteration-exec-time-rel-avg-others-p2-p3-small.png]]
+
+*** PDF
+#+name: last-iteration-exec-time-rel-avg-others-p2-p3-small-pdf
+#+begin_src R :results output graphics file :file "last-iteration-exec-time-rel-avg-others-p2-p3-small.pdf" :exports both :width 6 :height 2 :noweb no-export
+<<last-iteration-exec-time-rel-avg-others-p2-p3-small>>
+#+end_src
+
+#+RESULTS: last-iteration-exec-time-rel-avg-others-p2-p3-small-pdf
+[[file:../img/202102-perf-analysis/last-iteration-exec-time-rel-avg-others-p2-p3-small.pdf]]
+
+*** Only p2
+#+name: last-iteration-exec-time-rel-avg-others-p2-small
+#+begin_src R :results output graphics file :file "last-iteration-exec-time-rel-avg-others-p2-small.png" :exports both :res 150 :units in :width 3 :height 2 :noweb no-export
+<<function-plot-last-iter-rel-times-small>>
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+machines <- c("p2-1","p2-8","p2-16")
+epochs = 5
+
+if(!exists("dt.rel.li.p2")){
+    dt.rel.li.p2 <- preprocess_last_iter_rel_times(perf.dt, machines, models, epochs)
+}
+plot_last_iter_rel_times(dt.rel.li.p2, machines, models, epochs)
+#+end_src
+
+#+RESULTS: last-iteration-exec-time-rel-avg-others-p2-small
+[[file:../img/202102-perf-analysis/last-iteration-exec-time-rel-avg-others-p2-small.png]]
+
+#+name: last-iteration-exec-time-rel-avg-others-p2-small-pdf
+#+begin_src R :results output graphics file :file "last-iteration-exec-time-rel-avg-others-p2-small.pdf" :exports both :width 3 :height 2 :noweb no-export
+<<last-iteration-exec-time-rel-avg-others-p2-small>>
+#+end_src
+
+#+RESULTS: last-iteration-exec-time-rel-avg-others-p2-small-pdf
+[[file:../img/202102-perf-analysis/last-iteration-exec-time-rel-avg-others-p2-small.pdf]]
+
+*** Only p3
+#+name: last-iteration-exec-time-rel-avg-others-p3-small
+#+begin_src R :results output graphics file :file "last-iteration-exec-time-rel-avg-others-p3-small.png" :exports both :res 150 :units in :width 3 :height 2 :noweb no-export
+<<function-plot-last-iter-rel-times-small>>
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+machines <- c("p3-1", "p3-4", "p3-8")
+epochs = 5
+
+if(!exists("dt.rel.li.p3")){
+    dt.rel.li.p3 <- preprocess_last_iter_rel_times(perf.dt, machines, models, epochs)
+}
+plot_last_iter_rel_times(dt.rel.li.p3, machines, models, epochs)
+#+end_src
+
+#+RESULTS: last-iteration-exec-time-rel-avg-others-p3-small
+[[file:../img/202102-perf-analysis/last-iteration-exec-time-rel-avg-others-p3-small.png]]
+
+#+name: last-iteration-exec-time-rel-avg-others-p3-small-pdf
+#+begin_src R :results output graphics file :file "last-iteration-exec-time-rel-avg-others-p3-small.pdf" :exports both :width 3 :height 2 :noweb no-export
+<<last-iteration-exec-time-rel-avg-others-p3-small>>
+#+end_src
+
+#+RESULTS: last-iteration-exec-time-rel-avg-others-p3-small-pdf
+[[file:../img/202102-perf-analysis/last-iteration-exec-time-rel-avg-others-p3-small.pdf]]
+
+** g4dn*xlarge VMs
+
+#+name: plotting-function-v2
+#+begin_src R :results output :exports both :noweb no-export
+lbl.model.2l <- c("CNN /\nMNIST", "RESNET50\n/ CIFAR", "FCN /\nSEISMIC")
+names(lbl.model.2l) <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+
+## plot_last_iter_rel_times_v2 <- function(models, machines, epochs){
+##     perf.summary %>%
+##         filter(cloud.instance %in% machines & model %in% models & n.epochs == epochs) %>%
+##         group_by(model, batch.size, cloud.instance) %>%
+##         mutate(execution = factor(execution),
+##                cloud.instance = factor(cloud.instance, levels = machines)) %>%
+##         ggplot(aes(x = batch.size, y = e1s1.by.TMiIAvg2,  color = cloud.instance)) +
+##         geom_line(size = 0.3) + geom_point(size = 0.75) +
+##         facet_grid(rows = vars(model), scales="free_y",
+##                    labeller = labeller(model = lbl.model.2l)) + 
+##         scale_x_continuous(trans='log2', name =  "Batch size") +
+##         scale_y_continuous(limits=c(0,NA), name = "First step time relative\nto the average",
+##                            expand = expansion(mult = c(0,0.1))) +
+##         scale_color_discrete(name = "VM Type:", labels = lbl.inst,
+##                              guide = guide_legend(nrow=3)) +
+##         custom_theme_small()
+## }
+
+plot_last_iter_rel_times_v2 <- function(dt, machines, models, epochs = 5)
+{
+    dt %>%
+        ggplot(aes(x = batch.size, y = e1last.rel.avg,  color = cloud.instance)) +
+        geom_line(size=0.3) + geom_point(size = 0.75) +
+        scale_x_continuous(trans = 'log2', name = "Batch size") +
+        scale_y_continuous(limits = c(0,NA), name = expression('Relative iteration execution time'), expand = expansion(mult = c(0,0.1))) +
+        scale_color_discrete(name = "VM Type:", labels = lbl.inst,
+                             guide = guide_legend(nrow=3)) +
+##        scale_color_discrete(name = "Execution:", labels = function(x) lbl_pad(x, 10)) +
+        facet_grid(rows = vars(model), scales="free_y",
+                   labeller = labeller(model = lbl.model.2l)) + 
+        custom_theme_small()
+}
+#+end_src
+
+
+#+name: last-iteration-exec-time-rel-avg-others-g4-small
+#+begin_src R :results output graphics file :file "last-iteration-exec-time-rel-avg-others-g4-small.png" :exports both :res 150 :units in :width 3.3 :height 2.2 :noweb no-export
+<<INIT_TR_PERF_ANALYSIS_V3>>
+<<plotting-function-v2>>
+<<MY_THEME_SMALL>>
+
+lbl.model.2l <- c("CNN /\nMNIST", "RESNET50 /\n CIFAR", "FCN /\nSEISMIC")
+names(lbl.model.2l) <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+
+lbl.inst.pad <- str_pad(lbl.inst, 25, "right")
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+machines <- c("g4dnxlarge-1", "g4dn2xlarge-1", "g4dn4xlarge-1",
+              "g4dn8xlarge-1", "g4dn12xlarge-4", "g4dn16xlarge-1")
+epochs = 5
+
+if(!exists("dt.rel.li.g4")){
+    dt.rel.li.g4 <- preprocess_last_iter_rel_times(perf.dt, machines, models, epochs)
+}
+
+plot_last_iter_rel_times_v2(dt.rel.li.g4, machines, models, epochs) +
+    theme(panel.spacing.y = unit(8, "pt"),
+          legend.margin         = margin(0, 0, 1, 0, "pt"),
+          legend.key.height     = unit(10, "pt"))
+#+end_src
+
+#+RESULTS: last-iteration-exec-time-rel-avg-others-g4-small
+[[file:../img/202102-perf-analysis/last-iteration-exec-time-rel-avg-others-g4-small.png]]
+
+#+name: last-iteration-exec-time-rel-avg-others-g4-small-pdf
+#+begin_src R :results output graphics file :file "last-iteration-exec-time-rel-avg-others-g4-small.pdf" :exports both :width 3.3 :height 2.2 :noweb no-export
+<<last-iteration-exec-time-rel-avg-others-g4-small>>
+#+end_src
+
+#+RESULTS: last-iteration-exec-time-rel-avg-others-g4-small-pdf
+[[file:../img/202102-perf-analysis/last-iteration-exec-time-rel-avg-others-g4-small.pdf]]
+
+* [histogram] Plotting all iterations 
+
+Bar aligment changed to be on the left of the tick. Each bar includes
+the last value in the interval, but does not include the first value
+(except for the first bin). Ver: [[https://stackoverflow.com/questions/41486027/ggplot2-how-to-align-the-bars-of-a-histogram-with-the-x-axis/46453008]]
+
+#+name: histogram-percent-step-times-relative-to-median-v3-small
+#+begin_src R :results output graphics file :file  "histogram-percent-step-times-relative-to-median-v3-small.png" :exports both :res 150 :units in :width 3 :height 2 :noweb no-export
+<<INIT_TR_PERF_ANALYSIS_V3>>
+
+bw = 0.1 # bin width
+
+perf.dt %>%
+    group_by(model, batch.size, cloud.instance, n.epochs, execution) %>%
+    mutate(n.exec = length(execution),
+           med = median(step.time),
+           rel.stime = step.time / med) %>%
+    filter(n.epochs == 5 & ! (epoch == 1 & step == 1)) -> plot.dt
+
+plot.dt %>%
+    ggplot(aes(x = rel.stime)) +
+    geom_histogram(binwidth = bw, boundary = 0, fill = "white", color = "black", size = 0.25) + 
+    stat_bin(binwidth = bw, boundary = 0, closed = "right",
+             aes(y = stat(count), 
+             label = scales::percent(stat(density) * bw, 0.001)),
+             geom = "text", color = "black", size = 2.5, family = "serif",
+             vjust = 0.5, hjust = -0.1, angle = 90) +
+
+    ## we can't use trans='log10' directly because if (0 > n < 1) then (log(n) < 0)
+    scale_y_continuous(
+       breaks = NULL, ## seq(0, 1, 0.2) * nrow(plot.dt),
+       labels = NULL, ## function(x) scales::percent(x / nrow(plot.dt), 1),
+       trans = 'log10',
+       name = expression("Percent of total steps ("*log[10]*" scale)"),
+       expand = expansion(add=c(0,1.6))) +
+    scale_x_continuous(name = "Step time relative to the median step time",
+                       limits = c(NA, 2), breaks = seq(0, 2, 0.1)) +
+    custom_theme_v2_small() +
+    theme(## axis.text.x = element_text(angle = 0, hjust = 0.5),
+        ## plot.margin = margin(1, 1, 0, 1, "mm"),
+        ## axis.text = element_text(size = 5),
+        axis.text.x = element_text(angle = 90, vjust = 0.5))
+#+end_src
+
+#+RESULTS: histogram-percent-step-times-relative-to-median-v3-small
+[[file:../img/202102-perf-analysis/histogram-percent-step-times-relative-to-median-v3-small.png]]
+
+#+name: histogram-percent-step-times-relative-to-median-v3-small-pdf
+#+begin_src R :results output graphics file :file "histogram-percent-step-times-relative-to-median-v3-small.pdf" :exports both :width 3 :height 2 :noweb no-export
+<<histogram-percent-step-times-relative-to-median-v3-small>>
+#+end_src
+
+#+RESULTS: histogram-percent-step-times-relative-to-median-v3-small-pdf
+[[file:../img/202102-perf-analysis/histogram-percent-step-times-relative-to-median-v3-small.pdf]]
+
+* [Histogram] Last iteration of all except first epoch
+** With stacked bars for each model
+#+name: hist-rel-last-step-times-excl-epoch-1-stacked-models-small
+#+begin_src R :results output graphics file :file  "hist-rel-last-step-times-excl-epoch-1-stacked-models-small.png" :exports both :res 150 :units in :width 3 :height 2 :noweb no-export
+<<INIT_TR_PERF_ANALYSIS_V3>>
+
+bw = 0.1 # bin width
+
+perf.dt %>%
+    filter(n.epochs == 5) %>%    
+    group_by(model, batch.size, cloud.instance, execution) %>%
+    mutate(med = median(step.time), rel.stime = step.time / med) %>%
+    group_by(model, batch.size, cloud.instance, execution, epoch) %>%
+    filter(step == max(step)) %>%
+    ungroup() %>%
+    filter(epoch != 1) %>%
+    mutate(batch.size = as.factor(batch.size)) -> plot.dt
+
+nr = nrow(plot.dt)
+
+plot.dt %>%
+    ggplot(aes(x = rel.stime)) +
+    geom_histogram(aes(fill = model), binwidth = bw, boundary = 0,
+                   closed = "right", color = "white") +
+    stat_bin(binwidth = bw, boundary = 0, closed = "right",
+             inherit.aes = FALSE,
+             aes(y = stat(count), x = rel.stime,
+                 label = scales::percent(after_stat(count) / nr, 0.01)),
+             geom = "text", color = "black", angle = 90, vjust = 0.4,
+             hjust = - 0.05, size = 2.5, family = "serif") +    
+    scale_y_continuous(
+        breaks = seq(0, 1, 0.02) * nr,
+        labels = function(x) scales::percent(x / nr),
+        limits = c(0, 19.5 / 100 * nr),
+        name = "% of total training steps",
+        expand = expansion(add = c(0,25))) +
+    scale_x_continuous(breaks = seq(0, max(plot.dt$rel.stime) + bw, 0.2),
+                       name = "Relative step time") +
+    scale_fill_discrete(name = "DL application",
+                        labels = lbl.model,
+                        guide = guide_legend(
+                            ncol = 1, title.position = "top")) +
+    custom_theme_small() +
+    theme(
+        legend.justification = "left",
+        legend.direction = "verical",
+        legend.box.just = "center",
+        legend.box.spacing = unit(1, "pt"),
+        legend.spacing.x = unit(1, "pt"),
+        legend.spacing.y = unit(3, "pt"),
+        legend.background = element_rect(size=0.25, color = "black"),
+        legend.margin = margin(1, 2, 2, 2, "pt"),
+        ##legend.box.margin = margin(1, 1, 1, 1, "pt"),
+        legend.position = c(0.475, 0.745),
+        legend.title.align = 0.5,
+        legend.title = element_text(size = 8, vjust = 0, hjust = 0.5),
+        legend.key.height = unit(10, "pt"),
+        legend.text = element_text(size = 6),
+        ## legend.text.align = 0,
+        ## legend.title.align = 0,
+        axis.title = element_text(size = 10),
+        plot.margin = margin(2, 1, 0, 1, "pt")
+    )
+#+end_src
+
+#+RESULTS: hist-rel-last-step-times-excl-epoch-1-stacked-models-small
+[[file:../img/202102-perf-analysis/hist-rel-last-step-times-excl-epoch-1-stacked-models-small.png]]
+
+#+name: hist-rel-last-step-times-excl-epoch-1-stacked-models-small-pdf
+#+begin_src R :results output graphics file :file  "hist-rel-last-step-times-excl-epoch-1-stacked-models-small.pdf" :exports both :width 3 :height 2 :noweb no-export
+<<hist-rel-last-step-times-excl-epoch-1-stacked-models-small>>
+#+end_src
+
+#+RESULTS: hist-rel-last-step-times-excl-epoch-1-stacked-models-small-pdf
+[[file:../img/202102-perf-analysis/hist-rel-last-step-times-excl-epoch-1-stacked-models-small.pdf]]
+
+** 2021-03-02 One facet for each batch size
+#+name: rel-lst-excl-ep1-bs-sml
+#+begin_src R :results output graphics file :file  "hist-rel-last-step-times-excl-epoch-1-facets-bsizes-small.png" :exports both :res 150 :units in :width 5.4 :height 3.6 :noweb no-export
+<<small-plots-init>>
+
+bw = 0.1 # bin width
+
+## Computing the relative step times
+perf.dt %>%
+    filter(n.epochs == 5) %>%    
+    group_by(model, batch.size, cloud.instance, execution) %>%
+    mutate(med = median(step.time), rel.stime = step.time / med) %>%
+    group_by(model, batch.size, cloud.instance, execution, epoch) %>%
+    filter(step == max(step)) %>%
+    ungroup() %>%
+    filter(epoch != 1) %>%
+    mutate(batch.size = as.factor(batch.size)) -> plot.dt
+
+
+## Plotting
+nr = nrow(plot.dt)
+plot.dt %>%
+    ggplot(aes(x = rel.stime, y = stat(density))) +
+    geom_histogram(aes(fill = batch.size), 
+                   binwidth = bw,  boundary = 0, closed = "right",
+                   color = "white", size = 0.25) +
+    stat_bin(binwidth = bw, boundary = 0, closed = "right",
+             inherit.aes = FALSE,
+             aes(y = stat(density), x = rel.stime,
+                 label = scales::percent(stat(density) * bw, 0.01)),
+             geom = "text", color = "black", angle = 90, vjust = 0.4,
+             hjust = -0.1, size = 7 * fntscl, family = "serif") +
+    
+    ## Facets
+    facet_wrap(~batch.size) + 
+
+    ## Scales
+    scale_y_continuous(
+        breaks = seq(0, 1,  0.05) / bw,
+        labels = function(x) scales::percent(x * bw),
+        limits = c(0, 0.35) / bw,
+        expand = expansion(mult = c(0, 0.05)),
+        name = "Percent of total training steps") +
+    scale_x_continuous(breaks = seq(0, max(plot.dt$rel.stime), 0.2),
+                       name = "Relative step time") +
+    scale_fill_discrete(name = "Batch size:",
+                       labels = function(x) stringr::str_pad(x, 10, "right")) +
+    
+    ## Theme - visual customization
+    custom_theme_small() +
+    theme(strip.text = element_blank())
+#+end_src
+
+#+RESULTS: rel-lst-excl-ep1-bs-sml
+[[file:../img/202102-perf-analysis/hist-rel-last-step-times-excl-epoch-1-facets-bsizes-small.png]]
+
+
+
+#+name: rel-lst-excl-ep1-bs-sml-pdf
+#+begin_src R :results output graphics file :file "hist-rel-last-step-times-excl-epoch-1-facets-bsizes-small.pdf" :exports both :width 5.4 :height 3.6 :noweb no-export
+<<rel-lst-excl-ep1-bs-sml>>
+#+end_src
+
+#+RESULTS: rel-lst-excl-ep1-bs-sml-pdf
+[[file:../img/202102-perf-analysis/hist-rel-last-step-times-excl-epoch-1-facets-bsizes-small.pdf]]
+
+* Tempo da primeira iteração com diferentes números de GPUs
+
+** 2021-03-11 Plotting function
+#+name: func-plot-first-iter-by-num-gpu
+#+begin_src R :results output :exports both :noweb no-export
+<<INIT_TR_PERF_ANALYSIS_V3>>
+
+plot_first_iter_by_ngpu <- function(models, machines, epochs = 5)
+{
+    perf.dt %>%
+        filter(cloud.instance %in% machines & model %in% models & n.epochs == epochs) %>%
+        group_by(model, batch.size, cloud.instance, execution) %>%
+        summarize(time = step.time[epoch == 1 & step == 1], .group = "keep") %>% ungroup %>%
+        mutate(execution = factor(execution)) %>%
+        ggplot(aes(x = batch.size, y = time,  color = execution)) +
+        geom_line() + geom_point(size = 2) +
+        scale_x_continuous(name = "Batch size", trans = 'log2') +
+        scale_y_continuous("Time (s)", limits = c(0,NA)) +
+        scale_color_discrete(name = "Execution") +
+        facet_grid(cols = vars(cloud.instance), rows = vars(model), scales = "free_y",
+                   labeller = labeller(cloud.instance = lbl.inst)) + 
+        custom_theme_v1()
+}
+
+lbl.inst.pad <- str_pad(lbl.inst, 25, "right")
+lbl.model.2l <- c("CNN /\nMNIST", "RESNET50\n/ CIFAR", "FCN /\nSEISMIC")
+names(lbl.model.2l) <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+
+plot_first_iter_by_ngpu_small <- function(perf.data, models, machines, epochs)
+{
+perf.data %>%
+    filter(cloud.instance %in% machines & model %in% models & n.epochs == epochs) %>%
+    group_by(model, batch.size, cloud.instance, execution) %>%
+    summarize(time = step.time[epoch == 1 & step == 1], .group = "keep") %>% ungroup %>%
+    mutate(execution = factor(execution)) %>%
+    ggplot(aes(x = batch.size, y = time,  color = execution)) +
+    geom_line(size = 0.3) + geom_point(size = 0.75) +
+    facet_grid(cols = vars(cloud.instance), rows = vars(model), scales="free_y",
+               labeller = labeller(cloud.instance = lbl.inst, model = lbl.model.2l)) + 
+    scale_x_continuous(trans='log2', name =  "Batch size") +
+    scale_y_continuous(limits=c(0,NA), name = "Time (s)",
+                       expand = expansion(mult = c(0,0.1))) +
+    scale_color_discrete(name = "Execution:", labels = lbl_pad) +
+    custom_theme_small()
+}
+
+plot_first_iter_by_ngpu_small_one_exec <- function(perf.data, models, machines, epochs)
+{
+perf.data %>%
+    filter(cloud.instance %in% machines & model %in% models & n.epochs == epochs & execution == 1) %>%
+    group_by(model, batch.size, cloud.instance) %>%
+    summarize(time = step.time[epoch == 1 & step == 1], .group = "keep") %>% ungroup %>%
+    ggplot(aes(x = batch.size, y = time,  color = cloud.instance)) +
+    geom_line(size = 0.3) + geom_point(size = 0.75) +
+    facet_grid(rows = vars(model), scales="free_y",
+               labeller = labeller(model = lbl.model.2l)) + 
+    scale_x_continuous(trans='log2', name =  "Batch size") +
+    scale_y_continuous(limits=c(0,NA), name = "Time (s)",
+                       expand = expansion(mult = c(0,0.1))) +
+    scale_color_discrete(name = "VM Type:", labels = lbl.inst, #labels = lbl.inst.pad,
+                         guide = guide_legend(nrow = 3)) +
+    custom_theme_small()
+}
+
+#+end_src
+
+#+RESULTS: func-plot-first-iter-by-num-gpu
+
+**  p2 and p3
+#+name: first-iteration-exec-time-p2-3-by-num-gpu
+#+begin_src R :results output graphics file :file "first-iteration-exec-time-p2-3-by-num-gpu.png" :exports both :width 1200 :height 600 :noweb no-export
+<<func-plot-first-iter-by-num-gpu>>
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+machines <- c("p2-1","p2-8","p2-16", "p3-1", "p3-4", "p3-8")
+epochs = 5
+
+plot_first_iter_by_ngpu(models, machines, epochs)
+
+#+end_src
+
+#+RESULTS: first-iteration-exec-time-p2-3-by-num-gpu
+[[file:../img/202102-perf-analysis/first-iteration-exec-time-p2-3-by-num-gpu.png]]
+
+** g4dn*xlarge
+
+#+name: first-iteration-exec-time-g4-by-num-gpu
+#+begin_src R :results output graphics file :file "first-iteration-exec-time-g4-by-num-gpu.png" :exports both :width 1200 :height 400 :noweb no-export
+<<INIT_TR_PERF_ANALYSIS_V3>>
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+machines <- c("g4dnxlarge-1", "g4dn2xlarge-1", "g4dn4xlarge-1",
+              "g4dn8xlarge-1", "g4dn12xlarge-4", "g4dn16xlarge-1")
+epochs = 5
+
+plot_first_iter_by_ngpu(models, machines, epochs) +
+theme(legend.position = "none")
+#+end_src
+
+#+RESULTS: first-iteration-exec-time-g4-by-num-gpu
+[[file:../img/202102-perf-analysis/first-iteration-exec-time-g4-by-num-gpu.png]]
+
+** Only p2
+#+name: first-iteration-exec-time-p2-by-num-gpu
+#+begin_src R :results output graphics file :file "first-iteration-exec-time-p2-by-num-gpu.png" :exports both :res 150 :units in :width 3 :height 2 :noweb no-export
+<<func-plot-first-iter-by-num-gpu>>
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+machines <- c("p2-1","p2-8","p2-16")
+epochs = 5
+
+plot_first_iter_by_ngpu_small(perf.dt,models, machines, epochs)
+#+end_src
+
+#+RESULTS: first-iteration-exec-time-p2-by-num-gpu
+[[file:../img/202102-perf-analysis/first-iteration-exec-time-p2-by-num-gpu.png]]
+
+#+name: first-iteration-exec-time-p2-by-num-gpu-pdf
+#+begin_src R :results output graphics file :file "first-iteration-exec-time-p2-by-num-gpu.pdf" :exports both :width 3 :height 2 :noweb no-export
+<<first-iteration-exec-time-p2-by-num-gpu>>
+#+end_src
+
+#+RESULTS: first-iteration-exec-time-p2-by-num-gpu-pdf
+[[file:../img/202102-perf-analysis/first-iteration-exec-time-p2-by-num-gpu.pdf]]
+
+
+** Only p3
+#+name: first-iteration-exec-time-p3-by-num-gpu
+#+begin_src R :results output graphics file :file "first-iteration-exec-time-p3-by-num-gpu.png" :exports both :res 150 :units in :width 3 :height 2 :noweb no-export
+<<func-plot-first-iter-by-num-gpu>>
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+machines <- c("p3-1", "p3-4", "p3-8")
+epochs = 5
+
+plot_first_iter_by_ngpu_small(perf.dt, models, machines, epochs)
+#+end_src
+
+#+RESULTS: first-iteration-exec-time-p3-by-num-gpu
+[[file:../img/202102-perf-analysis/first-iteration-exec-time-p3-by-num-gpu.png]]
+
+#+name: first-iteration-exec-time-p3-by-num-gpu-pdf
+#+begin_src R :results output graphics file :file "first-iteration-exec-time-p3-by-num-gpu.pdf" :exports both :width 3 :height 2 :noweb no-export
+<<first-iteration-exec-time-p3-by-num-gpu>>
+#+end_src
+
+#+RESULTS: first-iteration-exec-time-p3-by-num-gpu-pdf
+[[file:../img/202102-perf-analysis/first-iteration-exec-time-p3-by-num-gpu.pdf]]
+
+
+** g4 without facets
+
+#+name: first-iteration-exec-time-g4-by-num-gpu-small
+#+begin_src R :results output graphics file :file "first-iteration-exec-time-g4-by-num-gpu-small.png" :exports both :res 150 :units in :width 3.3 :height 2.2 :noweb no-export
+<<func-plot-first-iter-by-num-gpu>>
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+machines <- c("g4dnxlarge-1", "g4dn2xlarge-1", "g4dn4xlarge-1",
+              "g4dn8xlarge-1", "g4dn16xlarge-1", "g4dn12xlarge-4")
+epochs <- 5
+
+perf.dt%>%
+    mutate(cloud.instance = factor(cloud.instance, levels = machines)) %>%
+    plot_first_iter_by_ngpu_small_one_exec(models, machines, epochs) +
+    theme(legend.position = "top",
+          legend.margin = margin(0, 1, 1, 1, "pt"),
+          legend.text = element_text(margin = margin(0, 10, 0, 0, "pt")),
+          legend.key.height = unit(10, "pt"))
+
+#+end_src
+
+#+RESULTS: first-iteration-exec-time-g4-by-num-gpu-small
+[[file:../img/202102-perf-analysis/first-iteration-exec-time-g4-by-num-gpu-small.png]]
+
+
+#+name: first-iteration-exec-time-g4-by-num-gpu-small-pdf
+#+begin_src R :results output graphics file :file "first-iteration-exec-time-g4-by-num-gpu-small.pdf" :exports both :width 3.3 :height 2.2 :noweb no-export
+<<first-iteration-exec-time-g4-by-num-gpu-small>>
+#+end_src
+
+#+RESULTS: first-iteration-exec-time-g4-by-num-gpu-small-pdf
+[[file:../img/202102-perf-analysis/first-iteration-exec-time-g4-by-num-gpu-small.pdf]]
+
+* 2021-03-12 Distribution of the ratio between max and mininum training times of all executions
+:PROPERTIES:
+:header-args:R: :output-dir "../img/202102-perf-analysis/" :session perf202102
+:datadir: "../data/202102-perf-analysis"
+:END:
+
+** 2021-03-12 Version 1: Highlighting the number of tests with small perf. variation
+
+#+begin_src R :results output latex :exports both :noweb no-export
+<<INIT_TR_PERF_ANALYSIS_V3>>
+library(xtable)
+
+epochs <- 5
+
+perf.summary %>%
+    filter(n.epochs == epochs) %>%
+    group_by(model, cloud.instance, batch.size) %>%
+    mutate(n.exec = n()) %>% filter(n.exec > 1) %>%
+    summarize(max.by.min =  max(total.training) / min(total.training)) %>%
+    group_by(model) %>%
+    summarize(
+        min.ratio = min(max.by.min),
+        max.ratio = max(max.by.min),
+        cnt = n(),
+        le1.05 = sum(max.by.min <= 1.05),
+        ## gt1.05 = sum(max.by.min > 1.05),
+        le1.1 = sum(max.by.min <= 1.1),
+        ## gt1.1 = sum(max.by.min > 1.1),
+        le1.15 = sum(max.by.min <= 1.15),
+        ## gt1.15 =sum(max.by.min > 1.15),
+        le1.2 = sum(max.by.min <= 1.2),
+        gt1.2 = sum(max.by.min > 1.2),
+        prop.le1.05 = le1.05 / cnt,
+        prop.le1.1  = le1.1 / cnt,
+        prop.le1.15 = le1.15 / cnt,
+        prop.le1.2  = le1.2 / cnt,
+        prop.gt1.2  = gt1.2 / cnt
+    ) %>% ungroup %>%
+    bind_rows(summarize(., model = "Total", 
+                        across(c(cnt, le1.05, le1.1, le1.15, le1.2, gt1.2), sum),
+                        prop.le1.05 = le1.05 / cnt,
+                        prop.le1.1 = le1.1 / cnt,
+                        prop.le1.15 = le1.15 / cnt,
+                        prop.le1.2 = le1.2 / cnt,
+                        prop.gt1.2 = gt1.2 / cnt)) %>%
+     mutate(txt.le1.05 = paste0(le1.05 , " (", scales::percent(prop.le1.05, suffix = "\\%"), ")" ),
+            txt.le1.1  = paste0(le1.1 ,  " (", scales::percent(prop.le1.1,  suffix = "\\%"), ")" ),
+            txt.le1.15 = paste0(le1.15,  " (", scales::percent(prop.le1.15, suffix = "\\%"), ")" ),
+            txt.le1.2  = paste0(le1.2 ,  " (", scales::percent(prop.le1.2,  suffix = "\\%"), ")" ),
+            txt.gt1.2  = paste0(gt1.2 ,  " (", scales::percent(prop.gt1.2,  suffix = "\\%"), ")" )) %>%
+    select(model, cnt, txt.le1.05, txt.le1.1, txt.le1.15, txt.le1.2, txt.gt1.2) %>%
+    rename(Model = model, Count = cnt, "$\\le 1.05$" = txt.le1.05, "$\\le 1.10$" = txt.le1.1, "$\\le 1.15$" = txt.le1.15, "$\\le 1.2$" = txt.le1.2, "$> 1.2$" = txt.gt1.2) %>%
+    xtable(caption = "",
+           label = "tab:") %>%
+    print(booktabs = TRUE,
+          ## floating=FALSE,  latex.environments=NULL, 
+          include.rownames = FALSE,
+          auto = TRUE,
+          sanitize.text.function = function(x){x})
+#+end_src
+
+#+RESULTS:
+#+begin_export latex
+
+% latex table generated in R 4.1.3 by xtable 1.8-4 package
+% Sun May  8 17:14:08 2022
+\begin{table}[ht]
+\centering
+\begin{tabular}{lrlllll}
+  \toprule
+Model & Count & $\le 1.05$ & $\le 1.10$ & $\le 1.15$ & $\le 1.2$ & $> 1.2$ \\ 
+  \midrule
+cnn-mnist &  16 & 7 (43.8\%) & 10 (62.5\%) & 14 (87.5\%) & 16 (100.0\%) & 0 (0.0\%) \\ 
+  resnet50-cifar &  16 & 12 (75.0\%) & 15 (93.8\%) & 16 (100.0\%) & 16 (100.0\%) & 0 (0.0\%) \\ 
+  seismic-fcn &  24 & 7 (29.2\%) & 13 (54.2\%) & 19 (79.2\%) & 22 (91.7\%) & 2 (8.3\%) \\ 
+  Total &  56 & 26 (46.4\%) & 38 (67.9\%) & 49 (87.5\%) & 54 (96.4\%) & 2 (3.6\%) \\ 
+   \bottomrule
+\end{tabular}
+\caption{} 
+\label{tab:}
+\end{table}
+#+end_export
+
+** 2022-05-08 Version 2: Highlighting the number of tests with significant perf. variation
+
+
+#+begin_src R :results output :exports both :noweb no-export
+<<INIT_TR_PERF_ANALYSIS_V3>>
+library(xtable)
+
+epochs <- 5
+
+perf.summary %>%
+    filter(n.epochs == epochs) %>%
+    group_by(model, cloud.instance, batch.size) %>%
+    mutate(n.exec = n()) %>% filter(n.exec > 1) %>%
+    summarize(max.by.min =  max(total.training) / min(total.training)) %>%
+    group_by(model) %>%
+    summarize(
+        min.ratio = min(max.by.min),
+        max.ratio = max(max.by.min),
+        cnt = n(),
+        lt1.05 = sum(max.by.min <  1.05),
+        ge1.05 = sum(max.by.min >= 1.05),
+        ge1.10 = sum(max.by.min >= 1.10),
+        ge1.15 = sum(max.by.min >= 1.15),
+        ge1.20 = sum(max.by.min >= 1.20),
+        prop.lt1.05 = lt1.05 / cnt,
+        prop.ge1.05 = ge1.05 / cnt,
+        prop.ge1.10 = ge1.10 / cnt,
+        prop.ge1.15 = ge1.15 / cnt,
+        prop.ge1.20 = ge1.20 / cnt) %>%
+    ungroup %>%
+    bind_rows(summarize(., model = "Total", 
+                        across(c(cnt, lt1.05, ge1.05, ge1.10, ge1.15, ge1.20), sum),
+                        prop.lt1.05 = lt1.05 / cnt,
+                        prop.ge1.05 = ge1.05 / cnt,
+                        prop.ge1.10 = ge1.10 / cnt,
+                        prop.ge1.15 = ge1.15 / cnt,
+                        prop.ge1.20 = ge1.20 / cnt)) %>%
+     mutate(txt.lt1.05 = paste0(lt1.05, " (", scales::percent(prop.lt1.05, suffix = "\\%"), ")" ),
+            txt.ge1.05 = paste0(ge1.05, " (", scales::percent(prop.ge1.05, suffix = "\\%"), ")" ),
+            txt.ge1.10 = paste0(ge1.10, " (", scales::percent(prop.ge1.10, suffix = "\\%"), ")" ),
+            txt.ge1.15 = paste0(ge1.15, " (", scales::percent(prop.ge1.15, suffix = "\\%"), ")" ),
+            txt.ge1.20 = paste0(ge1.20, " (", scales::percent(prop.ge1.20, suffix = "\\%"), ")" )) %>%
+    select(model, cnt, txt.lt1.05, txt.ge1.05, txt.ge1.10, txt.ge1.15, txt.ge1.20) %>%
+    rename(Model = model, Count = cnt, "$< 1.05$" = txt.lt1.05, "$\\ge 1.05$" = txt.ge1.05, "$\\ge 1.10$" = txt.ge1.10, "$\\ge 1.15$" = txt.ge1.15, "$\\ge 1.20$" = txt.ge1.20) -> tab.perf.var
+    glimpse(tab.perf.var)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+
+Rows: 4
+Columns: 7
+$ Model         <chr> "cnn-mnist", "resnet50-cifar", "seismic-fcn", "Total"
+$ Count         <int> 16, 16, 24, 56
+$ `$< 1.05$`    <chr> "7 (43.8\\%)", "12 (75.0\\%)", "7 (29.2\\%)", "26 (46.4\…
+$ `$\\ge 1.05$` <chr> "9 (56.2\\%)", "4 (25.0\\%)", "17 (70.8\\%)", "30 (53.6\…
+$ `$\\ge 1.10$` <chr> "6 (37.5\\%)", "1 (6.2\\%)", "11 (45.8\\%)", "18 (32.1\\…
+$ `$\\ge 1.15$` <chr> "2 (12.5\\%)", "0 (0.0\\%)", "5 (20.8\\%)", "7 (12.5\\%)"
+$ `$\\ge 1.20$` <chr> "0 (0.0\\%)", "0 (0.0\\%)", "2 (8.3\\%)", "2 (3.6\\%)"
+#+end_example
+
+Rows: 4
+Columns: 7
+$ Model         <chr> "cnn-mnist", "resnet50-cifar", "seismic-fcn", "Total"
+$ Count         <int> 16, 16, 24, 56
+$ `$< 1.05$`    <chr> "7 (43.8\\%)", "12 (75.0\\%)", "7 (29.2\\%)", "26 (46.4\…
+$ `$\\ge 1.05$` <chr> "9 (56.2\\%)", "4 (25.0\\%)", "17 (70.8\\%)", "30 (53.6\…
+$ `$\\ge 1.10$` <chr> "6 (37.5\\%)", "1 (6.2\\%)", "11 (45.8\\%)", "18 (32.1\\…
+$ `$\\ge 1.15$` <chr> "2 (12.5\\%)", "0 (0.0\\%)", "5 (20.8\\%)", "7 (12.5\\%)"
+$ `$\\ge 1.20$` <chr> "0 (0.0\\%)", "0 (0.0\\%)", "2 (8.3\\%)", "2 (3.6\\%)"
+
+#+begin_src R :results output latex :exports both :noweb no-export
+tab.perf.var %>%
+    xtable(caption = "",
+           label = "tab:") %>%
+    print(booktabs = TRUE,
+          ## floating=FALSE,  latex.environments=NULL, 
+          include.rownames = FALSE,
+          auto = TRUE,
+          sanitize.text.function = function(x){x})
+#+end_src
+
+#+RESULTS:
+#+begin_export latex
+
+% latex table generated in R 4.1.3 by xtable 1.8-4 package
+% Sun May  8 17:19:37 2022
+\begin{table}[ht]
+\centering
+\begin{tabular}{lrlllll}
+  \toprule
+Model & Count & $< 1.05$ & $\ge 1.05$ & $\ge 1.10$ & $\ge 1.15$ & $\ge 1.20$ \\ 
+  \midrule
+cnn-mnist &  16 & 7 (43.8\%) & 9 (56.2\%) & 6 (37.5\%) & 2 (12.5\%) & 0 (0.0\%) \\ 
+  resnet50-cifar &  16 & 12 (75.0\%) & 4 (25.0\%) & 1 (6.2\%) & 0 (0.0\%) & 0 (0.0\%) \\ 
+  seismic-fcn &  24 & 7 (29.2\%) & 17 (70.8\%) & 11 (45.8\%) & 5 (20.8\%) & 2 (8.3\%) \\ 
+  Total &  56 & 26 (46.4\%) & 30 (53.6\%) & 18 (32.1\%) & 7 (12.5\%) & 2 (3.6\%) \\ 
+   \bottomrule
+\end{tabular}
+\caption{} 
+\label{tab:}
+\end{table}
+#+end_export
+
+
+* Graphics for the execution time estimations (best instance predictions)
+
+** Prediction of TMiIAvg (prediction relative to real value)
+I'll show this one using a histogram.
+
+#+name: hist-relative-TMiIAvg-predictions
+#+begin_src R :results output graphics file :file  "hist-relative-TMiIAvg-predictions.png" :exports both :width 800 :height 600 :noweb no-export
+<<small-plots-init>>
+
+epochs = 5 # number of epochs
+
+perf.summary %>%
+    filter(n.epochs == epochs) %>%
+    select(model, batch.size, cloud.instance, execution, TMiIAvg3, avg.e1s2, avg.e1s2to6, avg.e1s2to11) %>%
+    rename(e1s2 = avg.e1s2) %>%
+    gather(avg.type, avg, e1s2, avg.e1s2to6, avg.e1s2to11) %>%
+    rename(TMiIAvg = TMiIAvg3) %>%
+    mutate(avg.rel.TMiIAvg = avg / TMiIAvg, ## Estimated relative to real TMiIAvg
+           err.rel.TMiIAvg = (avg - TMiIAvg) / TMiIAvg, ## Error relative to TMiIAvg
+
+           ## We need to set the levels for avg.type, so the facets are correctly ordered
+           avg.type = factor(avg.type, levels = c("e1s2", "avg.e1s2to6", "avg.e1s2to11"))) -> plot.dt
+
+bw = 0.05 # bin width
+nr = nrow(plot.dt) #Used to calculate y-axis labels and breaks
+ylim = c(0, 87.5)
+ystep = 20
+
+    ## Plot
+    ggplot(plot.dt, aes(x = avg.rel.TMiIAvg)) +
+    geom_histogram(aes(fill = avg.type), binwidth = bw, boundary = 0,
+                   color = "white", size = 0.25) +
+    stat_bin(binwidth = bw, boundary = 0, inherit.aes = FALSE,
+              aes(x = avg.rel.TMiIAvg, y = stat(count), 
+                  label = paste0(round(stat(density) * bw , 4) * 100, "%")),
+              geom = "text", color = "black", angle = 90, vjust = 0.4,
+              hjust = - 0.1, size = 5, family = "serif") +
+
+    ## Facets
+    facet_grid(rows = vars(model), cols = vars(avg.type), scales = "free",
+               labeller = labeller(avg.type = lbl.method, model = lbl.model)) +
+
+    ## Scales
+    scale_y_continuous(
+        breaks = seq(0, max(ylim), ystep),
+        ## labels = function(x) x / nr * 100,
+        limits = ylim,
+        name = "Estimation count") +
+    scale_x_continuous(breaks = seq(0, max(plot.dt$avg.rel.TMiIAvg), 0.05),
+                        name = expression('Estimated '*T[M[i]*S[avg]]*' relative to the real '*T[M[i]*S[avg]])) +
+    scale_fill_discrete(name = "Estimation method:") +
+    
+    ## Theme
+    custom_theme_hist() +
+    theme(legend.position = "none")
+#+end_src
+
+#+RESULTS: hist-relative-TMiIAvg-predictions
+[[file:../img/202102-perf-analysis/hist-relative-TMiIAvg-predictions.png]]
+
+
+** Prediction error relative to TMiIAvg
+
+*** Prediction errors by model
+
+#+name: pred-err-rel-tmiavg
+#+begin_src R :results output graphics file :file  "hist-prediction-error-by-model-relative-to-TMiIAvg.png" :exports both :width 1200 :height 600 :noweb no-export
+<<INIT_TR_PERF_ANALYSIS_V3>>
+
+epochs = 5 # number of epochs
+
+perf.summary %>%
+    filter(n.epochs == epochs) %>%
+    select(model, batch.size, cloud.instance, execution, TMiIAvg3, err.est3.e1s2, err.est3.e1s2to6, err.est3.e1s2to11) %>%
+    rename(TMiIAvg = TMiIAvg3, e1s2 = err.est3.e1s2, avg.e1s2to6 = err.est3.e1s2to6, avg.e1s2to11 = err.est3.e1s2to11) %>%
+    gather(est.method, err, e1s2, avg.e1s2to6, avg.e1s2to11) %>%
+    mutate(est.method = factor(est.method, levels = c("e1s2", "avg.e1s2to6", "avg.e1s2to11"))) -> plot.dt
+
+lbl.method = c(e1s2 = "Epoch 1, step 2", 
+               avg.e1s2to6 = "Avg. Epoch 1, steps 2 to 6", 
+               avg.e1s2to11 = "Avg. Epoch 1, steps 2 to 11")
+
+bw = 0.01 # bin width
+nr = nrow(plot.dt) #Used to calculate y-axis labels and breaks
+xmin = - 10
+xmax = max(plot.dt$err)
+xstep = bw * 2
+xbrk = seq(xmin, xmax + xstep, xstep)
+
+    ## Plot
+    ggplot(plot.dt, aes(x = err)) +
+    geom_histogram(aes(fill = est.method), binwidth = bw, color = "white", size = 0.25) +
+    ## stat_bin(binwidth = bw, inherit.aes = FALSE,
+    ##           aes(x = err, y = stat(count), 
+    ##               label = paste0(round(stat(density) * bw , 2) * 100, "%")),
+    ##           geom = "text", color = "black", angle = 90, vjust = 0.4,
+    ##           hjust = -0.2, size = 4) +
+
+    ## Facets
+    facet_grid(rows = vars(model), cols = vars(est.method), scales = "free_y",
+               labeller = labeller(est.method = lbl.method)) +
+
+    ## Scales
+    scale_y_continuous(
+        ## breaks = seq(0, 1, 0.02) * nr,
+        ## labels = function(x) x / nr * 100,
+        ## limits = c(0, 25),
+        name = "Estimation count") +
+    scale_x_continuous(breaks = xbrk,
+                       labels  = function(x) paste0(round(x * 100, 4), "%"),
+                       name = "Estimation error (%)") +
+    scale_fill_discrete(name = "Estimation method:") +
+    
+    ## Theme
+    theme_bw() +
+    theme(legend.position = "none",
+          legend.spacing = unit(.1, "line"),
+          legend.key.height =unit(1, "line"),
+          legend.key.width = unit(3, "line"),
+          legend.text = element_text(size = 14),
+          legend.title = element_text(size = 18),
+          axis.text = element_text(size = 14),
+          axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+          axis.title = element_text(size = 18),
+          strip.text = element_text(size = 18),
+          panel.grid.major = element_line(color = "darkgray", linetype = "dotted"))
+
+#+end_src
+
+#+RESULTS: pred-err-rel-tmiavg
+[[file:../img/202102-perf-analysis/hist-prediction-error-by-model-relative-to-TMiIAvg.png]]
+
+#+RESULTS:
+[[file:../img/202102-perf-analysis/hist-prediction-error-by-model-relative-to-TMiIAvg.png]]
+
+
+*** Absolute prediction errors by model
+
+#+name: hist-absolute-prediction-error-by-model-relative-to-TMiIAvg
+#+begin_src R :results output graphics file :file  "hist-absolute-prediction-error-by-model-relative-to-TMiIAvg.png" :exports both :width 1200 :height 900 :noweb no-export
+<<INIT_TR_PERF_ANALYSIS_V3>>
+
+epochs = 5 # number of epochs
+
+perf.summary %>%
+    filter(n.epochs == epochs) %>%
+    select(model, batch.size, cloud.instance, execution, TMiIAvg3, err.est3.e1s2, err.est3.e1s2to6, err.est3.e1s2to11) %>%
+    rename(TMiIAvg = TMiIAvg3, e1s2 = err.est3.e1s2, avg.e1s2to6 = err.est3.e1s2to6, avg.e1s2to11 = err.est3.e1s2to11) %>%
+    gather(est.method, err, e1s2, avg.e1s2to6, avg.e1s2to11) %>%
+    mutate(est.method = factor(est.method, levels = c("e1s2", "avg.e1s2to6", "avg.e1s2to11")),
+           err = abs(err)) -> plot.dt
+
+bw = 0.01 # bin width
+nr = nrow(plot.dt) #Used to calculate y-axis labels and breaks
+xmin = - 10
+xmax = max(plot.dt$err)
+xstep = bw * 2
+xbrk = seq(xmin, xmax, xstep)
+
+## Plot
+ggplot(plot.dt, aes(x = err)) +
+    geom_histogram(aes(fill = est.method), binwidth = bw, boundary = 0,
+                   color = "white", size = 0.25) +
+    stat_bin(binwidth = bw, boundary = 0,
+             inherit.aes = FALSE,
+             aes(x = err, y = stat(count), 
+                 label = paste0(round(stat(density) * bw , 4) * 100, "%")),
+             geom = "text", color = "black", angle = 90, vjust = 0.5,
+             hjust = -0.1, size = 5, family = "serif") +
+
+    ## Facets
+    facet_grid(rows = vars(model), cols = vars(est.method), scales = "free",
+               labeller = labeller(est.method = lbl.method, model = lbl.model)) +
+
+    ## Scales
+    scale_y_continuous(
+        breaks = seq(0, 100, 5),
+        limits = c(0, 37.5),
+        name = "Estimation count") +
+    scale_x_continuous(breaks = xbrk,
+                       labels  = function(x) paste0(round(x * 100, 4), "%"),
+                       name = "Estimation error (%)") +
+    scale_fill_discrete(name = "Estimation method:") +
+    
+    ## Theme
+    custom_theme_hist() +
+    theme(legend.position = "none")
+#+end_src
+
+#+RESULTS: hist-absolute-prediction-error-by-model-relative-to-TMiIAvg
+[[file:../img/202102-perf-analysis/hist-absolute-prediction-error-by-model-relative-to-TMiIAvg.png]]
+
+
+
+** 2021-03-08 All prediction errors in the same histogram
+#+name: hist-all-absolute-prediction-error-small
+#+begin_src R :results output graphics file :file  "hist-all-absolute-prediction-error.png" :exports both :res 150 :units in :width 7.14 :height 2.38 :noweb no-export
+<<INIT_TR_PERF_ANALYSIS_V3>>
+
+epochs = 5 # number of epochs
+
+perf.summary %>%
+    filter(n.epochs == epochs) %>%
+    select(model, batch.size, cloud.instance, execution, TMiIAvg3, err.est3.e1s2, err.est3.e1s2to6, err.est3.e1s2to11) %>%
+    rename(TMiIAvg = TMiIAvg3, e1s2 = err.est3.e1s2, avg.e1s2to6 = err.est3.e1s2to6, avg.e1s2to11 = err.est3.e1s2to11) %>%
+    gather(est.method, err, e1s2, avg.e1s2to6, avg.e1s2to11) %>%
+    mutate(est.method = factor(est.method, levels = c("e1s2", "avg.e1s2to6", "avg.e1s2to11")),
+           err = abs(err)) -> plot.dt
+
+bw = 0.01 # bin width
+nr = nrow(plot.dt) #Used to calculate y-axis labels and breaks
+
+## Plot
+ggplot(plot.dt, aes(x = err)) +
+    geom_histogram(aes(fill = est.method), binwidth = bw, boundary = 0,
+                   color = "white", size = 0.25) +
+    stat_bin(binwidth = bw, boundary = 0, inherit.aes = FALSE,
+             aes(x = err, y = stat(count), 
+                 label = paste0(round(stat(density) * bw , 3) * 100, "%")),
+             geom = "text", color = "black", angle = 90, vjust = 0.4,
+             hjust = -0.1, size = 7 * fntscl, family = "serif") +
+
+    ## Facets
+    facet_grid(cols = vars(est.method), scales = "free",
+               labeller = labeller(est.method = lbl.method)) +
+
+    ## Scales
+    scale_y_continuous(
+        breaks = seq(0, 100, 10),
+        limits = c(0, 90),
+        expand = expansion(mult=c(0,0.1)),
+        name = "Estimation count") +
+    scale_x_continuous(breaks = seq(0, max(plot.dt$err)/bw*bw+bw, bw * 2),
+                       labels  = function(x) paste0(round(x * 100, 4), "%"),
+                       name = "Estimation error (%)",
+                       expand = expansion(add=c(0.005,0.005))) +
+    scale_fill_discrete(name = "Estimation method:") +
+    
+    ## Theme
+    custom_theme_hist_small() +
+    theme(legend.position = "none",
+          axis.text.x = element_text(hjust = 1))
+#+end_src
+
+#+RESULTS: hist-all-absolute-prediction-error-small
+[[file:../img/202102-perf-analysis/hist-all-absolute-prediction-error.png]]
+
+#+name: hist-all-absolute-prediction-error-small-pdf
+#+begin_src R :results output graphics file :file  "hist-all-absolute-prediction-error.pdf" :exports both :width 7.14 :height 2.38 :noweb no-export
+<<hist-all-absolute-prediction-error-small>>
+#+end_src
+
+#+RESULTS: hist-all-absolute-prediction-error-small-pdf
+[[file:../img/202102-perf-analysis/hist-all-absolute-prediction-error.pdf]]
+
+* Scratchpad                                                :noexport:ignore:
+:PROPERTIES:
+:header-args:R: :output-dir "../img/202102-perf-analysis/" :session perf202102
+:datadir: "../data/202102-perf-analysis"
+:END:
+
+** tile
+Minimal and maximal exec times for the first iteration relative to the
+avg. exec. time of the remaining iterations.
+
+#+begin_src R :results output :exports both :noweb no-export
+<<INIT_TR_PERF_ANALYSIS_V3>>
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+## machines <- c("p2-1","p2-8","p2-16")
+machines <- c("p3-1", "p3-4", "p3-8")
+
+perf.dt %>%
+    filter(n.epochs == 5 & model %in% models & cloud.instance %in% machines & n.gpu == 4) %>%
+    group_by(model, batch.size, cloud.instance, execution) %>%
+    summarize(min = min(step.time[epoch == 1 & step == 1]),
+              max = max(step.time[epoch == 1 & step == 1]),
+              rel =  e1s1.by.TMiIAvg2[1],
+              avg = TMiIAvg2[1]
+              ) %>%
+    group_by(model, batch.size, cloud.instance) %>%
+    summarize(rel.min = min(rel),
+              rel.max = max(rel),
+              min  = min(min),
+              max  = max(max),
+              min.avg = min(avg),
+              max.avg = min(avg)) %>%
+    rename(VM = cloud.instance, b.size = batch.size) -> tmp
+paste0("rel = [", min(tmp$rel.min), ":", max(tmp$rel.max), "]; e1s1 = [", min(tmp$min), ":", max(tmp$max), "]; avg = [", min(tmp$min.avg), ":", max(tmp$max.avg), "]") 
+#+end_src
+
+#+RESULTS:
+: 
+: `summarise()` has grouped output by 'model', 'batch.size', 'cloud.instance'. You can override using the `.groups` argument.
+: `summarise()` has grouped output by 'model', 'batch.size'. You can override using the `.groups` argument.
+: 
+: [1] "rel = [86.1552792580706:1229.76598641777]; e1s1 = [7.484784:63.976638]; avg = [0.00700910477001704:0.0932847983870968]"
+
+
+#+begin_src R :results output :exports both :noweb no-export
+<<INIT_TR_PERF_ANALYSIS_V3>>
+
+models <- c("cnn-mnist", "resnet50-cifar", "seismic-fcn")
+machines <-  c("g4dnxlarge-1", "g4dn2xlarge-1", "g4dn4xlarge-1",
+              "g4dn8xlarge-1", "g4dn12xlarge-4", "g4dn16xlarge-1")
+
+perf.dt %>%
+    filter(n.epochs == 5 & model %in% models & cloud.instance %in% machines) %>%
+    group_by(model, batch.size, cloud.instance, execution) %>%
+    summarize(min = min(step.time[epoch == 1 & step == 1]),
+              max = max(step.time[epoch == 1 & step == 1]),
+              rel =  e1s1.by.TMiIAvg2[1],
+              ) %>%
+    group_by(model, batch.size, cloud.instance) %>%
+    summarize(rel.min = min(rel),
+              rel.max = max(rel),
+              min  = min(min),
+              max  = max(max)) %>%
+    rename(VM = cloud.instance, b.size = batch.size) -> tmp
+paste("rel.min =", min(tmp$rel.min), "; rel.max = ", max(tmp$rel.max), "; min =", min(tmp$min), "; max =", max(tmp$max))
+#+end_src
+
+#+RESULTS:
+: 
+: `summarise()` has grouped output by 'model', 'batch.size', 'cloud.instance'. You can override using the `.groups` argument.
+: `summarise()` has grouped output by 'model', 'batch.size'. You can override using the `.groups` argument.
+: 
+: [1] "rel.min = 26.2831670039761 ; rel.max =  710.692774388659 ; min = 2.118028 ; max = 49.567574"
+
+
+#+RESULTS:
+#+begin_example
+
+        instances n.gpu
+1            p2-1     1
+2            p2-8     8
+3           p2-16    16
+4            p3-1     1
+5            p3-4     4
+6            p3-8     8
+7    g4dnxlarge-1     1
+8   g4dn2xlarge-1     1
+9   g4dn4xlarge-1     1
+10  g4dn8xlarge-1     1
+11 g4dn12xlarge-4     4
+12 g4dn16xlarge-1     1
+#+end_example
+
+#+begin_src R :results output :exports both :noweb no-export
+epochs = 5
+bw = 0.05
+
+perf.summary %>%
+    filter(n.epochs == epochs) %>%
+    select(model, batch.size, cloud.instance, execution, TMiIAvg3, avg.e1s2, avg.e1s2to6, avg.e1s2to11) %>%
+    gather(avg.type, avg, avg.e1s2, avg.e1s2to6, avg.e1s2to11) %>%
+    rename(TMiIAvg = TMiIAvg3) %>%
+    mutate(avg.rel.TMiIAvg = avg / TMiIAvg,
+           err.rel.TMiIAvg = (avg - TMiIAvg) / TMiIAvg) -> plot.dt
+
+plot.dt %>%
+    group_by(model, avg.type) %>%
+    mutate(min.avg = min(avg.rel.TMiIAvg),
+           max.avg = max(avg.rel.TMiIAvg),
+           bin = ceiling(avg.rel.TMiIAvg / bw)) %>%
+    group_by(model, avg.type, bin) %>%
+    ## filter(bin == 2) %>%
+    count
+#+end_src
+
+#+RESULTS:
+#+begin_example
+
+# A tibble: 49 x 4
+# Groups:   model, avg.type, bin [49]
+   model     avg.type       bin     n
+   <fct>     <chr>        <dbl> <int>
+ 1 cnn-mnist avg.e1s2        19     1
+ 2 cnn-mnist avg.e1s2        20    15
+ 3 cnn-mnist avg.e1s2        21    31
+ 4 cnn-mnist avg.e1s2        22    28
+ 5 cnn-mnist avg.e1s2        23     5
+ 6 cnn-mnist avg.e1s2        24     1
+ 7 cnn-mnist avg.e1s2to11    19     1
+ 8 cnn-mnist avg.e1s2to11    20    19
+ 9 cnn-mnist avg.e1s2to11    21    59
+10 cnn-mnist avg.e1s2to11    22     2
+# … with 39 more rows
+#+end_example
+
+
+
+#+begin_src R :results output :exports both :noweb no-export
+epochs = 5
+bw = 0.05
+
+perf.dt %>%
+    filter(n.epochs == epochs) %>%
+    group_by(model, batch.size, cloud.instance, execution, epoch) %>%
+    group_by(model, batch.size, cloud.instance, execution) %>%
+    summarize(total.training = total.training[1],
+              e1s1.t = step.time[(epoch == 1 & step == 1)],
+              e1last.t =  step.time[(epoch == 1 & step == max(step))],
+              s.t = sum(step.time),
+              s2.t = s.t - e1s1.t - e1last.t,
+              e.t = sum(epoch.time[step == 1]),
+              e2.t = e.t - e1s1.t - e1last.t,
+              total2.t = total.training - e1s1.t - e1last.t,
+              t.rel = total2.t / total.training,
+              e.rel = e2.t / e.t,
+              s.rel = s2.t / s.t) %>%
+    rename(b.sz = batch.size, ex = execution, total.t = total.training) %>%
+    ungroup() %>%
+    select(total.t, e.t, s.t, t.rel, e.rel, s.rel) %>%
+    data.frame
+#+end_src
+
+#+RESULTS:
+#+begin_example
+
+`summarise()` has grouped output by 'model', 'batch.size', 'cloud.instance'. You can override using the `.groups` argument.
+      total.t        e.t        s.t     t.rel     e.rel      s.rel
+1    22.04973  18.940059  18.004820 0.8871560 0.8686288 0.86180484
+2    21.72917  18.466289  17.640278 0.8689825 0.8458325 0.83861360
+3    21.66803  18.431779  17.611358 0.8730608 0.8507728 0.84382107
+4    21.11694  18.199796  17.391321 0.8831756 0.8644504 0.85814907
+5    25.75470  21.866342  20.595372 0.6977093 0.6439548 0.62198274
+6    21.76330  18.574584  17.742398 0.8788547 0.8580576 0.85139996
+7    36.20827  32.851485  31.108831 0.9331989 0.9263732 0.92224873
+8    37.57863  33.524376  31.767694 0.9299380 0.9214651 0.91712225
+9    40.22040  34.849736  33.113558 0.9130872 0.8996931 0.89443391
+10   37.68879  30.994125  29.328482 0.6895683 0.6225157 0.60107738
+11   37.15949  31.273866  29.391042 0.6843526 0.6249489 0.60092269
+12   38.36199  31.941467  30.174127 0.6984417 0.6378257 0.61661270
+13   67.00236  56.639147  53.236247 0.6575456 0.5948871 0.56899199
+14   14.41534  10.993435  10.341412 0.8018350 0.7401526 0.72376935
+15   13.71996  10.523183   9.842688 0.8270664 0.7745319 0.75894370
+16   15.29467  11.666182  10.956777 0.8069439 0.7468984 0.73051117
+17   22.21656  17.515572  16.677829 0.6189228 0.5166457 0.49236636
+18   23.08366  18.281571  17.307598 0.6463122 0.5534077 0.52827602
+19   22.43572  17.501285  16.590684 0.6534666 0.5557626 0.53138008
+20   38.24124  31.536722  29.877390 0.5785163 0.4889114 0.46052657
+21   18.56195  15.469600  14.726888 0.8469482 0.8163534 0.80709170
+22   18.51041  15.353151  14.617786 0.8591873 0.8302302 0.82168976
+23   17.60303  14.748137  14.026477 0.8772042 0.8534338 0.84589302
+24   18.15299  15.309558  14.587000 0.8521418 0.8246802 0.81599589
+25   19.28389  15.316566  14.424791 0.6225576 0.5247918 0.49541328
+26   18.85662  15.808811  15.063716 0.8509867 0.8222581 0.81346648
+27   36.31744  30.191419  28.687543 0.8874073 0.8645615 0.85746151
+28   33.31423  29.752135  28.204719 0.9088168 0.8978998 0.89229816
+29   32.68876  29.236936  27.725388 0.9115503 0.9011076 0.89571612
+30   29.57219  23.992018  22.808983 0.6100684 0.5193764 0.49444787
+31   28.03487  22.409181  21.215860 0.6108788 0.5131923 0.48581099
+32   30.03716  24.145253  22.913200 0.6126419 0.5181189 0.49220798
+33   52.13147  41.792923  39.689590 0.5542473 0.4439789 0.41451285
+34   11.85515   8.596694   8.124849 0.7703899 0.6833594 0.66497076
+35   14.15544   9.375913   8.881279 0.7701212 0.6529365 0.63360716
+36   13.50912   9.198182   8.695848 0.7791293 0.6756133 0.65687441
+37   18.44156  13.629153  13.055081 0.5391845 0.3764723 0.34905383
+38   19.68786  14.718410  14.085914 0.5461390 0.3928997 0.36563925
+39   22.01669  13.497427  12.935592 0.6243256 0.3872088 0.36059324
+40   31.73105  24.747490  23.765030 0.4702867 0.3208055 0.29272726
+41   18.51705  15.427502  14.672562 0.8290673 0.7948359 0.78427973
+42   18.37088  15.500655  14.744912 0.8295493 0.7979873 0.78763325
+43   17.88177  14.802866  14.062077 0.8355283 0.8013192 0.79085273
+44   18.13449  15.244862  14.500473 0.8286903 0.7962190 0.78575782
+45   17.94132  13.993459  13.421992 0.5761466 0.4565684 0.43343075
+46   18.85846  15.649128  14.899570 0.8206227 0.7838359 0.77296130
+47   31.32946  27.862198  26.391270 0.8837199 0.8692497 0.86196227
+48   31.70857  28.125330  26.609012 0.8856634 0.8710967 0.86375109
+49   32.80155  27.847107  26.400073 0.8870952 0.8670077 0.85971812
+50   24.77358  19.249794  18.347446 0.5455614 0.4151590 0.38639585
+51   24.95058  19.116664  18.207778 0.5787818 0.4502367 0.42279393
+52   25.43766  19.657357  18.671678 0.5495940 0.4171509 0.38638231
+53   45.52376  34.602716  33.063553 0.4840297 0.3211830 0.28958294
+54   11.26512   7.891602   7.497176 0.7317133 0.6170255 0.59687728
+55   11.26260   7.963713   7.544448 0.7460294 0.6408247 0.62086438
+56   11.91011   8.501634   8.045805 0.7494190 0.6489561 0.62906794
+57   16.31582  11.777592  11.337614 0.4850912 0.2866830 0.25900132
+58   15.86755  11.292013  10.854267 0.5060316 0.3058750 0.27788132
+59   15.23779  11.017669  10.590364 0.5066273 0.3176497 0.29011788
+60   29.12953  21.828807  21.120212 0.4105180 0.2133635 0.18697142
+61   18.87886  15.638621  14.758187 0.8090657 0.7695052 0.75575448
+62   18.55167  15.490534  14.625939 0.8033961 0.7645446 0.75062593
+63   18.56223  15.590745  14.725011 0.8028878 0.7653196 0.75152195
+64   17.57314  14.632606  13.805460 0.8123050 0.7745864 0.76108083
+65   17.07791  12.827972  12.289633 0.5393954 0.3867961 0.35993508
+66   18.63244  15.666081  14.793524 0.8021448 0.7646812 0.75080150
+67   31.37299  27.538506  26.009887 0.8668700 0.8483329 0.83941929
+68   30.37566  26.890448  25.408507 0.8692059 0.8522539 0.84363666
+69   30.37566  26.890448  25.408507 0.8692059 0.8522539 0.84363666
+70   31.08437  26.767429  25.288408 0.8749937 0.8548332 0.84634292
+71   23.85617  17.799103  16.936201 0.5228159 0.3604291 0.32784289
+72   24.19981  18.345018  17.544830 0.5270907 0.3761622 0.34771012
+73   23.43887  17.784197  16.958400 0.5205508 0.3681049 0.33733442
+74   39.98920  30.037893  28.758855 0.4377058 0.2514224 0.21812969
+75   10.54973   7.358250   6.973979 0.7200748 0.5986631 0.57654920
+76   11.75372   8.168462   7.751319 0.7028128 0.5723731 0.54936005
+77   11.27069   7.883142   7.468049 0.7125277 0.5889950 0.56615028
+78   15.41922  10.862863  10.472530 0.4553310 0.2268729 0.19805692
+79   15.91746  11.133668  10.702057 0.4817042 0.2590087 0.22912474
+80   16.05546  11.223730  10.832052 0.4723616 0.2452173 0.21792491
+81   28.59360  20.565827  20.002426 0.3857749 0.1460149 0.12196106
+82  125.82844 122.554221 114.388561 0.8804400 0.8772457 0.86848288
+83  131.53359 128.210515 119.756542 0.8797116 0.8765939 0.86788226
+84  132.05554 128.687219 120.136349 0.8758297 0.8725797 0.86351034
+85  127.53420 124.203071 115.912565 0.8803450 0.8771358 0.86834811
+86  138.50481 135.187254 127.786687 0.6775758 0.6696633 0.65053241
+87  130.44978 127.104532 118.657315 0.8782460 0.8750416 0.86614577
+88  274.13764 270.367102 255.648848 0.9340247 0.9331046 0.92925329
+89  284.28534 280.437568 265.081649 0.9341196 0.9332156 0.92934690
+90  283.16329 279.230785 263.847957 0.9300136 0.9290279 0.92489011
+91  297.68911 293.922000 273.398333 0.5691319 0.5636096 0.53085037
+92  306.35894 302.471510 281.127654 0.5678243 0.5622699 0.52903640
+93  311.07550 306.101266 284.983785 0.5737736 0.5668473 0.53475045
+94   77.50656  73.234657  66.503357 0.7957672 0.7838539 0.76197615
+95   79.22468  74.811264  67.969452 0.7970791 0.7851080 0.76347694
+96   80.03645  75.619742  68.644605 0.7877954 0.7754012 0.75257919
+97  118.76451 114.996308 105.382901 0.4992451 0.4828363 0.43565880
+98  122.82073 118.964559 109.024483 0.5061001 0.4900906 0.44360066
+99  122.15472 118.292822 108.430825 0.5072503 0.4911635 0.44488387
+100 197.28557 193.488059 177.681559 0.3597502 0.3471843 0.28910999
+101 117.04130 113.685824 105.388027 0.8269461 0.8218384 0.80781069
+102 114.64009 111.313078 103.173449 0.8309703 0.8259182 0.81218447
+103 119.27186 115.843080 107.352442 0.8280487 0.8229592 0.80895677
+104 118.84577 115.484671 107.144323 0.8341013 0.8292729 0.81598314
+105 106.51477 103.219545  96.425933 0.5566256 0.5424712 0.51023636
+106 118.66348 115.287373 106.849700 0.8310741 0.8261272 0.81239690
+107 242.25278 237.917408 223.400725 0.8963667 0.8944783 0.88762140
+108 249.96308 245.400319 230.300197 0.8904648 0.8884282 0.88111271
+109 235.26531 230.797547 216.494645 0.8924065 0.8903237 0.88307784
+110 249.00314 245.238286 226.115079 0.4707529 0.4626280 0.41718092
+111 240.00550 236.045485 217.695471 0.4332576 0.4237497 0.37517628
+112 244.59420 240.673582 221.110617 0.4386425 0.4294978 0.37902215
+113  61.79291  57.554692  51.347021 0.7239772 0.7036514 0.66782394
+114  59.58987  55.781606  50.735747 0.7132803 0.6937057 0.66324357
+115  62.65799  58.229682  51.884389 0.7228833 0.7018088 0.66534101
+116  96.98367  93.259078  84.514714 0.3962695 0.3721577 0.30719763
+117  98.36227  94.484706  86.517752 0.3909025 0.3659057 0.30751532
+118  98.93249  95.073556  86.093008 0.3989793 0.3745845 0.30934605
+119 173.56347 169.711987 155.511605 0.2602456 0.2434574 0.17437451
+120 121.34807 117.989792 109.112910 0.8056599 0.8001286 0.78386801
+121 120.55400 117.183637 108.375929 0.8069033 0.8013496 0.78520529
+122 121.65926 118.256888 109.407718 0.8084102 0.8028980 0.78695589
+123 120.55296 117.226731 108.454090 0.7941901 0.7883504 0.77123043
+124  93.13704  89.814805  82.761054 0.4742620 0.4548151 0.40834877
+125 122.58453 119.217220 110.080500 0.8077825 0.8023533 0.78594859
+126 227.72317 223.928518 209.367612 0.8641216 0.8618190 0.85220891
+127 235.15406 230.620170 215.267943 0.8661826 0.8635518 0.85382076
+128 232.65675 228.659667 213.988226 0.8602499 0.8578070 0.84805795
+129 219.98135 216.163677 198.310179 0.3724702 0.3613874 0.30389427
+130 223.32858 219.427459 199.880798 0.3670733 0.3558208 0.29282544
+131 224.21572 220.213639 200.723517 0.3536486 0.3419021 0.27800119
+132  54.49270  50.828068  45.070953 0.6867676 0.6641840 0.62128873
+133  59.47278  55.019906  48.732968 0.6661644 0.6391465 0.59259352
+134  55.50638  51.648617  45.783177 0.6802468 0.6563637 0.61233922
+135  88.11411  84.293826  75.864868 0.3184754 0.2875880 0.20843554
+136  89.41702  85.511878  76.994467 0.3199341 0.2888769 0.21020987
+137  90.43959  85.440795  76.699228 0.3287706 0.2894997 0.20852253
+138 163.15429 159.192593 145.145764 0.2060238 0.1862647 0.10751354
+139 122.78852 118.279751 108.787213 0.7846254 0.7764154 0.75690593
+140 123.02622 119.654531 110.202117 0.7808482 0.7746728 0.75534570
+141 127.93102 124.518262 114.731855 0.7917978 0.7860914 0.76784544
+142 129.75276 126.337004 116.560349 0.7814777 0.7755695 0.75674510
+143  90.96068  87.474366  79.854519 0.4217326 0.3986856 0.34130721
+144 128.81862 125.236758 114.866620 0.7872080 0.7811220 0.76136175
+145 220.04131 216.326945 201.664129 0.8368488 0.8340475 0.82198126
+146 226.50918 222.573388 207.314495 0.8400884 0.8372607 0.82528266
+147 216.81120 212.934448 198.147960 0.8358276 0.8328386 0.82036448
+148 214.33365 210.413575 190.315660 0.3164706 0.3037363 0.23020868
+149 219.38173 215.343061 194.635071 0.3118801 0.2989747 0.22438982
+150 219.49546 215.432285 193.792782 0.3146977 0.3017725 0.22380621
+151  56.63761  52.333738  46.083237 0.6599312 0.6319643 0.58204579
+152  55.44907  51.609690  45.511704 0.6535352 0.6277608 0.57788555
+153  56.52603  52.593344  46.358346 0.6486307 0.6223569 0.57156552
+154  80.58924  76.679444  69.132447 0.2693380 0.2320824 0.14825094
+155  90.53237  85.920196  76.557644 0.2785471 0.2398197 0.14685405
+156  84.52098  80.485018  71.747266 0.2735205 0.2370908 0.14417978
+157 156.44139 152.295232 137.977811 0.1818981 0.1596257 0.07242336
+158  61.33809  60.618803  60.350961 0.8995752 0.8983836 0.89793258
+159  61.37496  57.954521  57.702955 0.9491040 0.9461001 0.94586511
+160  54.39532  47.360980  46.967985 0.8004767 0.7708423 0.76892486
+161  49.36089  43.493457  43.106582 0.8358742 0.8137330 0.81206125
+162  51.80327  46.207500  45.827507 0.8079149 0.7846532 0.78286757
+163  54.39532  47.360980  46.967985 0.8004767 0.7708423 0.76892486
+164  96.00828  85.276446  84.561873 0.7764022 0.7482629 0.74613567
+165  94.23798  83.864504  83.174935 0.7735510 0.7455408 0.74343121
+166  98.68279  86.290049  85.571403 0.7806752 0.7491764 0.74706992
+167  18.99051  15.526201  15.390152 0.8172198 0.7764367 0.77446039
+168  19.03634  15.486117  15.348084 0.8333905 0.7951950 0.79335304
+169  19.73197  15.621753  15.485430 0.8434081 0.8022074 0.80046619
+170  22.97941  18.522217  18.328731 0.6393604 0.5525760 0.54785285
+171  26.60994  18.300787  18.096458 0.7012405 0.5655939 0.56068901
+172  24.86144  19.034192  18.835216 0.6567299 0.5516391 0.54690257
+173  41.96021  35.366940  35.025871 0.6260904 0.5563845 0.55206469
+174  41.88733  35.077798  34.743460 0.6225890 0.5493235 0.54498662
+175  44.43377  36.030194  35.682533 0.6408057 0.5570283 0.55271230
+176  61.79417  60.876075  60.555802 0.8557669 0.8535916 0.85281731
+177  58.47517  54.850308  54.592637 0.9061945 0.8999953 0.89952325
+178  62.16942  56.965298  56.693882 0.9143915 0.9065706 0.90612333
+179  36.95100  30.314858  29.885999 0.7721739 0.7223011 0.71831616
+180  44.95985  36.236267  35.819433 0.7455044 0.6842366 0.68056208
+181  41.22832  33.365378  32.961694 0.7237425 0.6586392 0.65445856
+182  71.09904  60.955012  60.219292 0.6979461 0.6476788 0.64337442
+183  83.90615  73.528348  72.736960 0.7446816 0.7086459 0.70547589
+184  71.18158  60.541266  59.816729 0.6966016 0.6432784 0.63895759
+185  21.79486  16.059790  15.903629 0.8058798 0.7365580 0.73397116
+186  17.28772  13.844548  13.702734 0.8401259 0.8003648 0.79829871
+187  19.26031  15.559377  15.400580 0.8272255 0.7861296 0.78392437
+188  20.99551  16.513142  16.297503 0.6341797 0.5348805 0.52872627
+189  22.47615  16.245058  16.030313 0.6325078 0.4915494 0.48473812
+190  21.26806  16.222529  16.007385 0.6171022 0.4980134 0.49126650
+191  34.72572  28.278071  27.929010 0.5480711 0.4450274 0.43809122
+192  35.16097  28.597233  28.246507 0.5485476 0.4449287 0.43803657
+193  36.83910  30.164615  29.810716 0.5724291 0.4778212 0.47162212
+194  61.25373  60.532340  60.171935 0.8164916 0.8143047 0.81319245
+195  63.12929  58.311683  58.008143 0.8467960 0.8341386 0.83327069
+196  62.72708  58.673897  58.365757 0.8452575 0.8345679 0.83369449
+197  34.77548  28.647365  28.151120 0.7366803 0.6803521 0.67471742
+198  36.49771  30.489340  30.032459 0.6821358 0.6194960 0.61370742
+199  35.33964  29.707489  29.267082 0.6804620 0.6198818 0.61416182
+200  57.97387  47.501699  46.757668 0.6147387 0.5298045 0.52232252
+201  57.45979  47.065138  46.311028 0.6188506 0.5346712 0.52709396
+202  58.64271  46.579048  45.826882 0.6318275 0.5364733 0.52886535
+203  18.37675  15.074480  14.893310 0.7742563 0.7248041 0.72145646
+204  19.11073  15.496060  15.319487 0.7986408 0.7516710 0.74880870
+205  20.34532  16.253602  16.070050 0.7957893 0.7443809 0.74146118
+206  19.74852  15.452373  15.227409 0.5802423 0.4635392 0.45561369
+207  21.72468  16.541073  16.288041 0.6097523 0.4874574 0.47949512
+208  22.29103  16.238504  16.001678 0.5950534 0.4441191 0.43589205
+209  32.04999  25.278678  24.906428 0.4952568 0.3600530 0.35048843
+210  31.82061  25.324603  24.960026 0.5013484 0.3734395 0.36428768
+211  31.79648  25.162236  24.794628 0.5017555 0.3703889 0.36105422
+212  97.49479  96.796340  96.288671 0.7871337 0.7855978 0.78446737
+213  97.93525  92.565808  92.148039 0.8052818 0.7939868 0.79305284
+214  95.02805  89.910597  89.539314 0.8037512 0.7925813 0.79172118
+215  37.22779  31.299582  30.687690 0.7271872 0.6755159 0.66904587
+216  38.65000  32.712853  32.171817 0.6653499 0.6046134 0.59796411
+217  36.48202  30.490631  29.991327 0.6512228 0.5826883 0.57574081
+218  53.81445  43.156411  42.286326 0.5827059 0.4796497 0.46894297
+219  59.73440  49.343830  48.412663 0.6233768 0.5440694 0.53530007
+220  54.94909  43.949490  43.071486 0.5831019 0.4787614 0.46813609
+221  27.40506  22.087052  21.839343 0.7543017 0.6951437 0.69168588
+222  25.27788  21.514191  21.269949 0.7407544 0.6954020 0.69190433
+223  22.92971  19.420143  19.179504 0.7297005 0.6808526 0.67684836
+224  22.96125  18.344897  18.029577 0.6153614 0.5185700 0.51015023
+225  23.40650  18.428546  18.103922 0.6105371 0.5053346 0.49646470
+226  20.36323  15.740764  15.428594 0.5631564 0.4348719 0.42343754
+227  34.65338  26.510329  26.013519 0.5067696 0.3552663 0.34295309
+228  32.86947  25.688242  25.194991 0.5065176 0.3685631 0.35620124
+229  32.42728  25.733343  25.243325 0.5034379 0.3742687 0.36212211
+#+end_example
+** 2021-03-05
+#+RESULTS:
+#+begin_example
+
+[1] "Loading performance data..."
+
+[1] "Loading summary data..."
+
+`summarise()` has grouped output by 'model', 'cloud.instance', 'batch.size'. You can override using the `.groups` argument.
+
+Adding missing grouping variables: `model`, `cloud.instance`, `batch.size`
+# A tibble: 229 x 7
+# Groups:   model, cloud.instance, batch.size [116]
+   model     cloud.instance batch.size total.time total.sel est.TMiIAvg3 rel.est
+   <fct>     <fct>               <int>      <dbl>     <dbl>        <dbl>   <dbl>
+ 1 cnn-mnist g4dnxlarge-1          256       18.0      15.5         15.5   1.05 
+ 2 cnn-mnist g4dnxlarge-1          512       14.7      11.9         11.9   1.05 
+ 3 cnn-mnist g4dnxlarge-1         1024       14.7      11.5         11.5   0.975
+ 4 cnn-mnist g4dnxlarge-1         2048       14.8      11.2         11.2   0.948
+ 5 cnn-mnist g4dn2xlarge-1         256       17.6      14.8         14.8   1.10 
+ 6 cnn-mnist g4dn2xlarge-1         512       14.6      12.0         12.0   1.06 
+ 7 cnn-mnist g4dn2xlarge-1        1024       14.7      11.6         11.6   1.01 
+ 8 cnn-mnist g4dn2xlarge-1        2048       14.6      11.0         11.0   0.957
+ 9 cnn-mnist g4dn4xlarge-1         256       17.6      14.9         14.9   1.06 
+10 cnn-mnist g4dn4xlarge-1         512       14.0      11.9         11.9   1.08 
+# … with 219 more rows
+#+end_example
+
+#+begin_src R :results output :exports both :noweb no-export
+## reload.perf.data = TRUE
+<<INIT_TR_PERF_ANALYSIS_V3>>
+
+epochs = 5
+
+perf.dt %>%
+    filter(n.epochs == epochs) %>%
+    group_by(model, cloud.instance, batch.size, execution) %>%
+    summarize(total.time = sum(step.time),
+           total.sel = total.time - step.time[epoch == 1 & step == 1] - step.time[epoch == 1 & step == max(step)],
+           est.TMiIAvg3 = est.TMiIAvg3[1],
+           est3.e1s2 = est3.e1s2[1],
+           est3.e1s2to6 = est3.e1s2to6[1],
+           est3.e1s2to11 = est3.e1s2to11[1],
+           rel.TMiIAvg3 = est.TMiIAvg3 / total.sel,
+           rel.e1s2 = est3.e1s2 / total.sel,
+           rel.e1s2to6 = est3.e1s2to6 / total.sel,
+           rel.e1s2to11 = est3.e1s2to11 / total.sel) %>%
+    ## select(model, batch.size, cloud.instance, execution, total.sel, est.TMiIAvg3, est3.e1s2, est3.e1s2to6, est3.e1s2to11) %>%
+    ## rename(TMiIAvg = est.TMiIAvg3, e1s2 = est3.e1s2, avg.e1s2to6 = est3.e1s2to6, avg.e1s2to11 = est3.e1s2to11) %>%
+    ## select(model, batch.size, cloud.instance, execution, total.sel, rel.TMiIAvg3, rel.e1s2, rel.e1s2to6, rel.e1s2to11) %>%
+    rename(TMiIAvg = rel.TMiIAvg3, e1s2 = rel.e1s2, avg.e1s2to6 = rel.e1s2to6, avg.e1s2to11 = rel.e1s2to11) %>%
+    gather(est.method, rel.est, TMiIAvg, e1s2, avg.e1s2to6, avg.e1s2to11) %>%
+    mutate(est.method = factor(est.method, levels = c("TMiIAvg", "e1s2", "avg.e1s2to6", "avg.e1s2to11"))) -> plot.dt
+
+plot.dt %>%
+filter(est.method == "e1s2") %>%
+select(total.time, total.sel, est.TMiIAvg3, rel.est)
+#+end_src
+** 2021-03-09
+
+Unused nested table
+#+begin_src R :results output :exports both :noweb no-export
+err.table %>%
+    select(est.method, le.1, le.2, le.5, le.10, le.20, gt.20) -> err.c
+
+
+err.table %>%
+    select(est.method, frac.le.1, frac.le.2, frac.le.5, frac.le.10, frac.le.20, frac.gt.20) -> err.p
+
+names.c <- c("le.1", "le.2", "le.5", "le.10", "le.20", "gt.20")
+names.p <- c("frac.le.1", "frac.le.2", "frac.le.5", "frac.le.10", "frac.le.20", "frac.gt.20")
+names.m <- c("e1s2", "avg.e1s2to6", "avg.e1s2to11")
+names.v <- c("Count", "Percentage")
+
+est.method <- matrix(ncol = length(names.m), nrow = 0, dimnames = list(NULL, names.m))
+
+nc = length(names.v)
+est.method$e1s2         <- matrix(ncol = nc, nrow = 0, dimnames = list(NULL, names.v))
+est.method$avg.e1s2to6  <- matrix(ncol = nc, nrow = 0, dimnames = list(NULL, names.v))
+est.method$avg.e1s2to11 <- matrix(ncol = nc, nrow = 0, dimnames = list(NULL, names.v))
+
+nc = length(names.c)
+est.method$e1s2$Count           <- matrix(ncol = nc, nrow = 0, dimnames = list(NULL, names.c))
+est.method$avg.e1s2to6$Count    <- matrix(ncol = nc, nrow = 0, dimnames = list(NULL, names.c))
+est.method$avg.e1s2to11$Count   <- matrix(ncol = nc, nrow = 0, dimnames = list(NULL, names.c))
+
+nc = length(names.p)
+est.method$e1s2$Percent         <- matrix(ncol = nc, nrow = 0, dimnames = list(NULL, names.p))
+est.method$avg.e1s2to6$Percent  <- matrix(ncol = nc, nrow = 0, dimnames = list(NULL, names.p))
+est.method$avg.e1s2to11$Percent <- matrix(ncol = nc, nrow = 0, dimnames = list(NULL, names.p))
+
+est.method$e1s2$Count         <- select(filter(err.c, est.method == "e1s2"),         ! c(est.method))
+est.method$avg.e1s2to6$Count  <- select(filter(err.c, est.method == "avg.e1s2to6",   ! c(est.method))
+est.method$avg.e1s2to11$Count <- select(filter(err.c, est.method == "avg.e1s2to11"), ! c(est.method))
+
+est.method$e1s2$Percent         <- select(filter(err.p, est.method == "e1s2"),         ! c(est.method))
+est.method$avg.e1s2to6$Percent  <- select(filter(err.p, est.method == "avg.e1s2to6"),  ! c(est.method))
+est.method$avg.e1s2to11$Percent <- select(filter(err.p, est.method == "avg.e1s2to11"), ! c(est.method))
+
+est.method
+#+end_src
+
